@@ -842,7 +842,7 @@ def on_tick(token, msg):
         #print("token not in tokens")
         return
 
-    on_message()
+    on_message(msg)
 
     
 for t in TOKENS:
