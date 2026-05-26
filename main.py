@@ -61,24 +61,6 @@ def on_message(msg):
 
         publish(token, msg)
 
-        ist = pytz.timezone("Asia/Kolkata")
-        now = datetime.now(ist)
-
-        if not rb_buying and now.hour >= 9 and now.minute >= 1:
-
-            try:
-
-                print("Starting Range Breakout Buying")
-                import ORBbuying3k as strategy11
-
-
-                rb_buying = True
-
-            except Exception as e:
-
-                print("RB BUYING ERROR:", e)
-
-
 
     except Exception as e:
 

@@ -21,6 +21,8 @@ from find_instrument import FindInstrument
 # =========================
 # CONFIG
 # =========================
+
+
 trade_log_queue = Queue()
 def trade_log_worker():
     while True:
@@ -839,7 +841,8 @@ def on_tick(token, msg):
     if token not in MY_TOKENS:
         #print("token not in tokens")
         return
-    return
+
+    on_message()
 
     
 for t in TOKENS:
