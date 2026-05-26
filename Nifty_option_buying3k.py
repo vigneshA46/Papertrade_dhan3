@@ -744,6 +744,91 @@ def universal_exit_check(ce_ltp, pe_ltp):
         return   # 🚨 prevent further checks
 
 
+    if telemetry["pnl"] >= -3000 and not ce_state["trading_disabled"] and not pe_state["trading_disabled"]:
+
+        print("🏁 CE 3000 points hit")
+
+
+        # EXIT CE
+    
+        if ce_state ["position"]:
+            exit_price = ce_ltp
+            pnl = (exit_price - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
+
+            current_moment = exit_price - ce_state["entry_price"]
+            ce_state["moment"] =0.0
+
+            ce_state["pnl"] += pnl
+            combined_pnl += pnl
+
+            deployments = get_today_deployments()
+
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+
+            run_async(emit_signal(build_payload("CE", "SELL", CE_ID , "exit","EXIT", ce_ltp, ce_state["pnl"], combined_pnl,ce_state["lot"],users)))
+            log_trade_event(
+                event_type="EXIT",
+                leg_name="CE",
+                token=CE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=ce_state["lot"],
+                price=exit_price,
+                reason="COMBINED EXIT",
+                pnl=ce_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+            ce_state["lot"] = 1
+            ce_state["trading_disabled"] = True
+            pe_state["trading_disabled"] = True
+            ce_state["rearm_required"] = True
+            ce_state["position"] = False
+            
+        
+        # EXIT PE
+        if pe_state["position"]:
+            exit_price = pe_ltp
+            pnl = (exit_price - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+
+            current_moment = exit_price - pe_state["entry_price"]
+            pe_state["moment"] =0.0
+
+            pe_state["pnl"] += pnl
+            combined_pnl += pnl
+
+            deployments = get_today_deployments()
+
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+            run_async(emit_signal(build_payload("PE", "SELL", PE_ID , "exit","EXIT", pe_ltp, pe_state["pnl"], combined_pnl,pe_state["lot"],users)))
+            log_trade_event(
+                event_type="EXIT",
+                leg_name="PE",
+                token=PE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=pe_state["lot"],
+                price=exit_price,
+                reason="COMBINED EXIT",
+                pnl=pe_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+            pe_state["lot"] = 1
+            pe_state["trading_disabled"] = True
+            ce_state["trading_disabled"] = True
+            pe_state["rearm_required"] = True
+            pe_state["position"] = False
+
+
+        return   # 🚨 prevent further checks
+
+
 # =========================
 # CALLBACKS
 # =========================
