@@ -366,7 +366,10 @@ def init_state():
         "pnl": 0.0,
         "symbol": None,
         "rearm_required": False,
-        "moment":0.0
+        "moment":0.0,
+        "tsl": None,
+        "sl": None,
+        "tsl_active": False,
          }
 # =========================
 # START
@@ -564,7 +567,12 @@ def handle_leg(name, token, candle, state, ltp):
             state["entry_price"] = entry_price
             state["entry_time"] = datetime.now(IST).isoformat()
 
+
             state["position"] = True
+
+            state["tsl"] = entry_price + 35
+            state["sl"] = entry_price + 25
+            state["tsl_active"] = False
 
             deployments = get_today_deployments()
 
@@ -657,9 +665,94 @@ def universal_exit_check(ce_ltp, pe_ltp):
     total = float(ce_state["pnl"] + pe_state["pnl"] + ce_running + pe_running)
     #combined_pnl = total
 
-    if telemetry["pnl"] >= 3000 and not ce_state["trading_disabled"] and not pe_state["trading_disabled"]:
+    if telemetry["pnl"] >= 5000 and not ce_state["trading_disabled"] and not pe_state["trading_disabled"]:
 
-        print("🏁 CE 3000 points hit")
+        print("🏁 CE 5000 points hit")
+
+
+        # EXIT CE
+    
+        if ce_state ["position"]:
+            exit_price = ce_ltp
+            pnl = (exit_price - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
+
+            current_moment = exit_price - ce_state["entry_price"]
+            ce_state["moment"] =0.0
+
+            ce_state["pnl"] += pnl
+            combined_pnl += pnl
+
+            deployments = get_today_deployments()
+
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+
+            run_async(emit_signal(build_payload("CE", "SELL", CE_ID , "exit","EXIT", ce_ltp, ce_state["pnl"], combined_pnl,ce_state["lot"],users)))
+            log_trade_event(
+                event_type="EXIT",
+                leg_name="CE",
+                token=CE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=ce_state["lot"],
+                price=exit_price,
+                reason="COMBINED EXIT",
+                pnl=ce_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+            ce_state["lot"] = 1
+            ce_state["trading_disabled"] = True
+            pe_state["trading_disabled"] = True
+            ce_state["rearm_required"] = True
+            ce_state["position"] = False
+            
+        
+        # EXIT PE
+        if pe_state["position"]:
+            exit_price = pe_ltp
+            pnl = (exit_price - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+
+            current_moment = exit_price - pe_state["entry_price"]
+            pe_state["moment"] =0.0
+
+            pe_state["pnl"] += pnl
+            combined_pnl += pnl
+
+            deployments = get_today_deployments()
+
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+            run_async(emit_signal(build_payload("PE", "SELL", PE_ID , "exit","EXIT", pe_ltp, pe_state["pnl"], combined_pnl,pe_state["lot"],users)))
+            log_trade_event(
+                event_type="EXIT",
+                leg_name="PE",
+                token=PE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=pe_state["lot"],
+                price=exit_price,
+                reason="COMBINED EXIT",
+                pnl=pe_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+            pe_state["lot"] = 1
+            pe_state["trading_disabled"] = True
+            ce_state["trading_disabled"] = True
+            pe_state["rearm_required"] = True
+            pe_state["position"] = False
+
+
+        return   # 🚨 prevent further checks
+
+
+    if telemetry["pnl"] >= -3000 and not ce_state["trading_disabled"] and not pe_state["trading_disabled"]:
+
+        print("🏁 CE 5000 points hit")
 
 
         # EXIT CE
@@ -769,16 +862,103 @@ def on_message(msg):
     if token == CE_ID:
         tick_exit_check("CE", token, ce_state, ltp)
         telemetry["ce_ltp"] = float(ltp or 0)
+        state = ce_state
 
     if token == PE_ID:
         tick_exit_check("PE", token, pe_state, ltp)
         telemetry["pe_ltp"] = float(ltp or 0)  
+        state = pe_state
 
     # =========================
     # RUN UNIVERSAL EXIT (TICK LEVEL)
     # =========================
     if "ce_ltp" in telemetry and "pe_ltp" in telemetry:
         universal_exit_check(telemetry["ce_ltp"], telemetry["pe_ltp"])
+
+
+    # PE rearm → price back below top_line
+    if pe_state["rearm_required"] and ltp < state["marked"]:
+        print("🔁 PE REARMED")
+        pe_state["rearm_required"] = False
+
+    # CE rearm → price back above bottom_line
+    if ce_state["rearm_required"] and ltp > state["marked"]:
+        print("🔁 CE REARMED")
+        ce_state["rearm_required"] = False
+
+
+
+    
+    if state["position"] and ltp is not None:
+
+        # =========================
+        # 🔥 ACTIVATE TSL
+        # =========================
+        if not state["tsl_active"] and ltp >= state["tsl"]:
+            state["tsl_active"] = True
+            print(f"🔥 {leg_name} TSL ACTIVATED")
+
+        # =========================
+        # 🔁 TRAILING LOGIC (STEP BASED)
+        # =========================
+        if state["tsl_active"]:
+
+        # 🔽 Trail as long as price keeps moving
+            if ltp >= state["tsl"] + 10:
+                state["tsl"] += 10
+                state["sl"]  += 10
+
+                print(f"🔁 {leg_name} TRAIL -> TSL:{state['tsl']} SL:{state['sl']}")
+
+            # =========================
+            # ❌ SL HIT
+            # =========================
+            if ltp <= state["sl"]:
+                print(f"❌ {leg_name} SL HIT @ {ltp}")
+
+                exit_price = ltp
+                final_pnl = state["entry_price"] - exit_price
+
+                telemetry["pnl"] += final_pnl
+
+                state["position"] = False
+                state["rearm_required"] = True
+                state["tsl_active"] = False
+
+                deployments = get_today_deployments()
+                users = group_users_by_broker(deployments)
+                print("FORMATTED USERS:", users)
+
+                run_async(
+                    emit_signal(
+                        build_payload(
+                            leg_name,
+                            "SELL",
+                            token,
+                            "sl hit",
+                            "EXIT",
+                            ltp,
+                            final_pnl,
+                            telemetry["pnl"],
+                            state["lot"],
+                            users
+                        )
+                    )
+                )
+
+                log_trade_event(
+                    event_type="EXIT",
+                    leg_name=str(leg_name),
+                    token=token,
+                    symbol=SYMBOL,
+                    side="SELL",
+                    lot=state["lot"],
+                    price=exit_price,
+                    reason="SL",
+                    pnl=final_pnl,
+                    cum_pnl=telemetry["pnl"]
+                )
+
 
     # =========================
     # CANDLE LOGIC
@@ -815,20 +995,7 @@ def on_message(msg):
 # START WEBSOCKET
 # =========================
 
-SUBSCRIBE_TOKENS = []
 
-for i in range(-20, 21):
-
-    strike = ATM + (i * 50)
-
-    ce = find_option_security(fno_df, strike, "CE", today_date, "NIFTY")
-    pe = find_option_security(fno_df, strike, "PE", today_date, "NIFTY")
-
-    if ce is not None:
-        SUBSCRIBE_TOKENS.append(str(ce["SECURITY_ID"]))
-
-    if pe is not None:
-        SUBSCRIBE_TOKENS.append(str(pe["SECURITY_ID"]))
 
 TOKENS = list(set(SUBSCRIBE_TOKENS))
 
