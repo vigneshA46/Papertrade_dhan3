@@ -750,7 +750,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
         return   # 🚨 prevent further checks
 
 
-    if telemetry["pnl"] >= -3000 and not ce_state["trading_disabled"] and not pe_state["trading_disabled"]:
+    if telemetry["pnl"] <= -3000 and not ce_state["trading_disabled"] and not pe_state["trading_disabled"]:
 
         print("🏁 CE 5000 points hit")
 
