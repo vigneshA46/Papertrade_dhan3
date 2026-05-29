@@ -997,9 +997,9 @@ def on_message(msg):
 
 
 
-TOKENS = list(set(SUBSCRIBE_TOKENS))
 
 MY_TOKENS = [CE_ID, PE_ID]
+TOKENS = [CE_ID, PE_ID]
 
 def on_tick(token, msg):
 
