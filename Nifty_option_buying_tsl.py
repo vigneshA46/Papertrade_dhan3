@@ -1006,7 +1006,7 @@ def on_tick(token, msg):
     if token not in MY_TOKENS:
         #print("token not in tokens")
         return
-    return
+    on_message(msg)
 
     
 for t in TOKENS:
