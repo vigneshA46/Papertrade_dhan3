@@ -14,17 +14,45 @@ from dispatcher import subscribe
 from queue import Queue
 import pandas as pd
 from vwap_engine import VWAPManager, MinuteVWAPSampler
+from signal_emitter import emit_signal
+import asyncio
+from find_instrument import FindInstrument
+
 
 vwap_manager = VWAPManager()
 
-
+ce_strike = None
+pe_strike = None
 
 # =========================
 # CONFIG
 # =========================
 
 COMMON_ID = '136b0559-76dc-435c-bb08-3e6a584a46d0'
+strategy_id = '136b0559-76dc-435c-bb08-3e6a584a46d0'
 trade_log_queue = Queue()
+
+
+
+loop = asyncio.new_event_loop()
+
+def start_loop():
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+threading.Thread(target=start_loop, daemon=True).start()
+
+def run_async(coro):
+    try:
+        if asyncio.iscoroutine(coro):
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        else:
+            print("❌ Not coroutine:", coro)
+    except Exception as e:
+        print("WS error: ", e)
+
+
+
 def trade_log_worker():
     while True:
         payload = trade_log_queue.get()
@@ -133,6 +161,49 @@ telemetry = {
     "ce_pnl": 0.0,
     "pe_pnl": 0.0
 }
+
+
+
+def build_payload(name, side, token , reason,event_type,ltp,pnl,cum_pnl,lot,users , strike = ATM):
+
+    if name == "CE":
+        row = AngelCE
+    else:
+        row = AngelPE
+
+    expiry_date = ce_row["SM_EXPIRY_DATE"]
+
+    day = expiry_date.strftime("%d")
+    month = expiry_date.strftime("%b").upper()
+    year = expiry_date.strftime("%y")
+
+    symbol = f"NIFTY{day}{month}{year}{ATM}{name}"
+    expiry = expiry_date.strftime("%Y-%m-%d")
+
+    return {
+        "strategy_id": COMMON_ID,
+        "users": users,
+        "option": name,
+        "side": side,
+        "quantity": lot * LOTSIZE,
+        "security_id": token,
+        "token": int(row["token"]),
+        "event_type": event_type,
+        "leg_name": name,
+        "symbol": symbol,
+        "exchange": "NFO",
+        "expiry":expiry,
+        "strike": str(strike),
+        "price":ltp,
+        "pnl":pnl,
+        "cum_pnl":cum_pnl,
+        "zebusymbol": "NIFTY",
+        "is_ce": True if name == "CE" else False,
+        "is_fno": True,
+        "antsymbol": "NIFTY",
+        "reason":reason
+    }
+
 
 
 def telemetry_broadcaster():
@@ -270,6 +341,52 @@ def calculate_strikes(fut_price, step=50):
     atm = round(fut_price / step) * step
     return atm
 
+
+
+def get_today_deployments():
+    url = f"https://algoapi.dreamintraders.in/api/deployments/today/{COMMON_ID}"
+
+    try:
+        response = requests.get(url, timeout=10)
+
+        # Raise error if status not 200
+        response.raise_for_status()
+
+        data = response.json()
+
+        # 👉 store in variable (this is what you asked)
+        user_deployments = data
+
+        return user_deployments
+
+    except requests.exceptions.RequestException as e:
+        print("API Error:", e)
+        return None
+
+def group_users_by_broker(deployments):
+    grouped = {}
+
+    if not deployments:
+        return grouped
+
+    for d in deployments:
+
+        if d["type"] == "paper":
+            continue
+        broker = d.get("broker_name")
+
+        if not broker:
+            continue
+
+        if broker not in grouped:
+            grouped[broker] = []
+
+        grouped[broker].append(d)
+
+    return grouped
+
+
+
 # =========================
 # STEP 3: HISTORICAL FETCH
 # =========================
@@ -314,11 +431,28 @@ def check_mtm_and_kill_switch():
     if combined_exit_active:
         return
 
-    total_pnl = ce_state["pnl"] + pe_state["pnl"]
+    ce_ltp = telemetry.get("ce_ltp", 0)
+    pe_ltp = telemetry.get("pe_ltp", 0)
+
+    ce_running = 0
+    pe_running = 0
+
+    if ce_state["position"]:
+        ce_running = (ce_ltp - ce_state["entry_price"]) * LOTSIZE 
+
+    if pe_state["position"]:
+        pe_running = (pe_ltp - pe_state["entry_price"]) * LOTSIZE
+
+
     combined_pnl = total_pnl
 
-    telemetry["ce_pnl"] = ce_state["pnl"]
-    telemetry["pe_pnl"] = pe_state["pnl"]
+    ce_total = ce_state["pnl"] + ce_running
+    pe_total = pe_state["pnl"] + pe_running
+
+    total_pnl = ce_total + pe_total
+    
+    telemetry["ce_pnl"] = float(ce_total)
+    telemetry["pe_pnl"] = float(pe_total)
     telemetry["pnl"] = combined_pnl
 
 
@@ -332,6 +466,24 @@ def check_mtm_and_kill_switch():
         # CE FORCE EXIT
         if ce_state["position"]:
             print(f"🔴 CE FORCE EXIT | TOKEN: {CE_ID} | LTP: {telemetry.get('ce_ltp')} | TOTAL PNL: {ce_state['pnl']:.2f}")
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "PROFIT EXIT",
+                        "EXIT",
+                        ltp,
+                        pnl,
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        strike = ce_strike
+                    )
+                )
+            )
 
             log_trade_event(
                 
@@ -354,6 +506,24 @@ def check_mtm_and_kill_switch():
         # PE FORCE EXIT
         if pe_state["position"]:
             print(f"🔴 PE FORCE EXIT | TOKEN: {PE_ID} | LTP: {telemetry.get('pe_ltp')} | TOTAL PNL: {pe_state['pnl']:.2f}")
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "PROFIT EXIT",
+                        "EXIT",
+                        ltp,
+                        pnl,
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        strike = pe_strike
+                    )
+                )
+            )
 
             log_trade_event(
                 
@@ -380,7 +550,7 @@ def check_mtm_and_kill_switch():
 
 def handle_leg(name, token, candle, state, ltp, vwap):
 
-    global combined_pnl
+    global combined_pnl , ce_strike , pe_strike
 
     now = datetime.now(IST).time()
 
@@ -404,30 +574,31 @@ def handle_leg(name, token, candle, state, ltp, vwap):
             state["pnl"] += pnl
             combined_pnl += pnl
 
-            #deployments = get_today_deployments()
-            #users = group_users_by_broker(deployments)
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
 
             print(
                 f"🔴 {name} TIME EXIT | TOKEN: {token} | "
                 f"LTP: {ltp} | PNL: {pnl:.2f}"
             )
 
-            #run_async(
-                #emit_signal(
-                 #   build_payload(
-                  #      name,
-                   #     "SELL",
-                    #    token,
-                     #   "TIME EXIT",
-                      #  "EXIT",
-                       # ltp,
-                       # pnl,
-                        #combined_pnl,
-                        #state["lot"],
-                        #users
-                    #)
-                #)
-            #)
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "TIME EXIT",
+                        "EXIT",
+                        ltp,
+                        pnl,
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        strike = ce_strike if name == "CE" else pe_strike
+                    )
+                )
+            )
 
             log_trade_event(
                 event_type="EXIT",
@@ -441,6 +612,9 @@ def handle_leg(name, token, candle, state, ltp, vwap):
                 pnl=state["pnl"],
                 cum_pnl=combined_pnl
             )
+
+
+            
 
             state["position"] = False
             state["entry_price"] = None
@@ -467,7 +641,25 @@ def handle_leg(name, token, candle, state, ltp, vwap):
             state["pnl"] += pnl
             combined_pnl += pnl
 
-            print(f"🔴 CE VWAP TICK EXIT | {ltp} < {vwap} | PNL: {pnl:.2f}")
+            print(f"🔴 CE VWAP CLOSE EXIT | {ltp} < {vwap} | PNL: {pnl:.2f}")
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "VWAP EXIT",
+                        "EXIT",
+                        ltp,
+                        pnl,
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        strike = ce_strike if name == "CE" else pe_strike
+                    )
+                )
+            )
 
             log_trade_event(
                 event_type="EXIT",
@@ -514,30 +706,31 @@ def handle_leg(name, token, candle, state, ltp, vwap):
         state["entry_signal"] = False
         state["last_price"] = ltp
 
-        #deployments = get_today_deployments()
-        #users = group_users_by_broker(deployments)
+        deployments = get_today_deployments()
+        users = group_users_by_broker(deployments)
 
         print(
             f"🟢 {name} BUY | TOKEN: {token} | "
             f"LTP: {ltp} | VWAP: {round(vwap,2)}"
         )
 
-        #run_async(
-            #emit_signal(
-             #   build_payload(
-              #      name,
-               #     "BUY",
-                #    token,
-                 #   "VWAP ENTRY",
-                  #  "ENTRY",
-                   # ltp,
-                    #state["pnl"],
-                    #combined_pnl,
-                    #state["lot"],
-                    #users
-                #)
-            #)
-        #)
+        run_async(
+            emit_signal(
+                build_payload(
+                    name,
+                    "BUY",
+                    token,
+                    "VWAP ENTRY",
+                    "ENTRY",
+                    ltp,
+                    state["pnl"],
+                    combined_pnl,
+                    state["lot"],
+                    users,
+                    strike = ce_strike if name == "CE" else pe_strike
+                )
+            )
+        )
 
         log_trade_event(
             event_type="ENTRY",
@@ -566,11 +759,9 @@ def on_message(msg):
     # UPDATE PNL TICKWISE
     # =========================
     if token == str(CE_ID):
-        update_pnl_tickwise(ce_state, ltp)
         telemetry["ce_ltp"] = ltp
 
     elif token == str(PE_ID):
-        update_pnl_tickwise(pe_state, ltp)
         telemetry["pe_ltp"] = ltp
 
 
@@ -585,12 +776,30 @@ def on_message(msg):
 
             exit_price = ltp
 
-            pnl = (exit_price - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
+            pnl = (exit_price - ce_state["entry_price"]) * LOTSIZE
 
             ce_state["pnl"] += pnl
             combined_pnl += pnl
 
             print(f"🔴 CE VWAP TICK EXIT | {ltp} < {vwap} | PNL: {pnl:.2f}")
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "VWAP EXIT",
+                        "EXIT",
+                        ltp,
+                        pnl,
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        strike = ce_strike
+                    )
+                )
+            )
 
             log_trade_event(
                 event_type="EXIT",
@@ -615,12 +824,30 @@ def on_message(msg):
 
             exit_price = ltp
 
-            pnl = (exit_price - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+            pnl = (exit_price - pe_state["entry_price"]) * LOTSIZE
 
             pe_state["pnl"] += pnl
             combined_pnl += pnl
 
             print(f"🔴 PE VWAP TICK EXIT | {ltp} < {vwap} | PNL: {pnl:.2f}")
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "TIME EXIT",
+                        "EXIT",
+                        ltp,
+                        pnl,
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        strike = pe_strike
+                    )
+                )
+            )
 
             log_trade_event(
                 event_type="EXIT",

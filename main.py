@@ -19,8 +19,9 @@ import threading
 #import vwap_option_buying as strategy10
 
 #import Nifty_option_buying3k as strategy9
+#import Nifty_option_buying_tsl as strategy11
+import vwap_option_buying as strategy10
 
-import Nifty_option_buying_tsl as strategy11
 
 try:
     import paper_trade_niftyoption50_no_reentry as strategy1
