@@ -474,7 +474,7 @@ def check_mtm_and_kill_switch():
             run_async(
                 emit_signal(
                     build_payload(
-                        name,
+                        "CE",
                         "SELL",
                         token,
                         "PROFIT EXIT",
@@ -514,7 +514,7 @@ def check_mtm_and_kill_switch():
             run_async(
                 emit_signal(
                     build_payload(
-                        name,
+                        "PE",
                         "SELL",
                         token,
                         "PROFIT EXIT",
