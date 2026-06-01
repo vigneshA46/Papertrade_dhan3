@@ -446,12 +446,12 @@ def check_mtm_and_kill_switch():
         pe_running = (pe_ltp - pe_state["entry_price"]) * LOTSIZE
 
 
-    combined_pnl = total_pnl
 
     ce_total = ce_state["pnl"] + ce_running
     pe_total = pe_state["pnl"] + pe_running
 
     total_pnl = ce_total + pe_total
+    combined_pnl = total_pnl
     
     telemetry["ce_pnl"] = float(ce_total)
     telemetry["pe_pnl"] = float(pe_total)
