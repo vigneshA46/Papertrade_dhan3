@@ -790,7 +790,7 @@ def on_message(msg):
             run_async(
                 emit_signal(
                     build_payload(
-                        name,
+                        "CE",
                         "SELL",
                         token,
                         "VWAP EXIT",
@@ -838,7 +838,7 @@ def on_message(msg):
             run_async(
                 emit_signal(
                     build_payload(
-                        name,
+                        "PE",
                         "SELL",
                         token,
                         "TIME EXIT",
