@@ -667,7 +667,7 @@ def handle_leg(name, token, candle, state, ltp, vwap):
 
             log_trade_event(
                 event_type="EXIT",
-                leg_name="CE",
+                leg_name=name,
                 token=CE_ID,
                 symbol=SYMBOL,
                 side="SELL",
