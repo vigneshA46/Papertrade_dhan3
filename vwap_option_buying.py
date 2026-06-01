@@ -482,7 +482,7 @@ def check_mtm_and_kill_switch():
                         ltp,
                         pnl,
                         combined_pnl,
-                        state["lot"],
+                        ce_state["lot"],
                         users,
                         strike = ce_strike
                     )
@@ -522,7 +522,7 @@ def check_mtm_and_kill_switch():
                         ltp,
                         pnl,
                         combined_pnl,
-                        state["lot"],
+                        pe_state["lot"],
                         users,
                         strike = pe_strike
                     )
@@ -798,7 +798,7 @@ def on_message(msg):
                         ltp,
                         pnl,
                         combined_pnl,
-                        state["lot"],
+                        ce_state["lot"],
                         users,
                         strike = ce_strike
                     )
@@ -846,7 +846,7 @@ def on_message(msg):
                         ltp,
                         pnl,
                         combined_pnl,
-                        state["lot"],
+                        pe_state["lot"],
                         users,
                         strike = pe_strike
                     )
