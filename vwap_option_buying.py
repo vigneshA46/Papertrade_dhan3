@@ -33,6 +33,8 @@ COMMON_ID = '136b0559-76dc-435c-bb08-3e6a584a46d0'
 strategy_id = '136b0559-76dc-435c-bb08-3e6a584a46d0'
 trade_log_queue = Queue()
 
+finder = FindInstrument()
+
 
 
 loop = asyncio.new_event_loop()
@@ -964,6 +966,9 @@ pe_strike = atm + 200
 print(ce_strike ,"CE strike")
 print(pe_strike , "PE strike")
 
+
+AngelCE = finder.get_option("NIFTY" , int(ce_strike) , "CE")
+AngelPE = finder.get_option("NIFTY" , int(pe_strike) , "PE")
 
 ce_row = find_option_security(fno_df, ce_strike, "CE", today, "NIFTY")
 pe_row = find_option_security(fno_df, pe_strike, "PE", today, "NIFTY")
