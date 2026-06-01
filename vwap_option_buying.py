@@ -471,6 +471,10 @@ def check_mtm_and_kill_switch():
         if ce_state["position"]:
             print(f"🔴 CE FORCE EXIT | TOKEN: {CE_ID} | LTP: {telemetry.get('ce_ltp')} | TOTAL PNL: {ce_state['pnl']:.2f}")
 
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+
             run_async(
                 emit_signal(
                     build_payload(
@@ -510,6 +514,10 @@ def check_mtm_and_kill_switch():
         # PE FORCE EXIT
         if pe_state["position"]:
             print(f"🔴 PE FORCE EXIT | TOKEN: {PE_ID} | LTP: {telemetry.get('pe_ltp')} | TOTAL PNL: {pe_state['pnl']:.2f}")
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
 
             run_async(
                 emit_signal(
@@ -644,6 +652,10 @@ def handle_leg(name, token, candle, state, ltp, vwap):
 
             state["pnl"] += pnl
             combined_pnl += pnl
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
 
             print(f"🔴 CE VWAP CLOSE EXIT | {ltp} < {vwap} | PNL: {pnl:.2f}")
 
@@ -784,6 +796,9 @@ def on_message(msg):
 
             ce_state["pnl"] += pnl
             combined_pnl += pnl
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
 
             print(f"🔴 CE VWAP TICK EXIT | {ltp} < {vwap} | PNL: {pnl:.2f}")
 
@@ -832,6 +847,9 @@ def on_message(msg):
 
             pe_state["pnl"] += pnl
             combined_pnl += pnl
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
 
             print(f"🔴 PE VWAP TICK EXIT | {ltp} < {vwap} | PNL: {pnl:.2f}")
 
