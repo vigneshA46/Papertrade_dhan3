@@ -584,7 +584,6 @@ def handle_leg(name, token, candle, state, ltp, vwap):
             pnl = (exit_price - state["entry_price"]) * LOTSIZE * state["lot"]
 
             state["pnl"] += pnl
-            combined_pnl += pnl
 
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
@@ -651,7 +650,6 @@ def handle_leg(name, token, candle, state, ltp, vwap):
             pnl = (exit_price - state["entry_price"]) * LOTSIZE * state["lot"]
 
             state["pnl"] += pnl
-            combined_pnl += pnl
 
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
@@ -795,7 +793,7 @@ def on_message(msg):
             pnl = (exit_price - ce_state["entry_price"]) * LOTSIZE
 
             ce_state["pnl"] += pnl
-            combined_pnl += pnl
+            #combined_pnl += pnl
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
 
@@ -846,7 +844,7 @@ def on_message(msg):
             pnl = (exit_price - pe_state["entry_price"]) * LOTSIZE
 
             pe_state["pnl"] += pnl
-            combined_pnl += pnl
+            #combined_pnl += pnl
 
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
