@@ -430,7 +430,7 @@ from datetime import time as dtime
 
 
 def check_mtm_and_kill_switch():
-    global combined_exit_active , combined_pnl
+    global combined_exit_active , combined_pnl , CE_ID , PE_ID
 
     if combined_exit_active:
         return
@@ -480,7 +480,7 @@ def check_mtm_and_kill_switch():
                     build_payload(
                         "CE",
                         "SELL",
-                        token,
+                        str(CE_ID),
                         "PROFIT EXIT",
                         "EXIT",
                         ltp,
@@ -524,7 +524,7 @@ def check_mtm_and_kill_switch():
                     build_payload(
                         "PE",
                         "SELL",
-                        token,
+                        str(PE_ID),
                         "PROFIT EXIT",
                         "EXIT",
                         ltp,
