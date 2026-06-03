@@ -678,7 +678,7 @@ def handle_leg(name, token, candle, state, ltp, vwap):
             log_trade_event(
                 event_type="EXIT",
                 leg_name=name,
-                token=CE_ID,
+                token=token,
                 symbol=SYMBOL,
                 side="SELL",
                 lot=state["lot"],
@@ -709,7 +709,7 @@ def handle_leg(name, token, candle, state, ltp, vwap):
     # =========================
     # ENTRY EXECUTION
     # =========================
-    if state["entry_signal"] and not state["position"]:
+    if state["entry_signal"] and not state["position"] and not state["trading_disabled"]:
 
         entry_price = ltp
 
