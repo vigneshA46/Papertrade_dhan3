@@ -20,13 +20,12 @@ import threading
 
 #import Nifty_option_buying3k as strategy9
 #import Nifty_option_buying_tsl as strategy11
+
+import paper_trade_niftyoption50_no_reentry as strategy1
+
+
 import vwap_option_buying as strategy10
 
-
-try:
-    import paper_trade_niftyoption50_no_reentry as strategy1
-except Exception as e:
-    print("strategy1 ERROR:", e)
 
 
 rb_started = False
