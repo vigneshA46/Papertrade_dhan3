@@ -130,7 +130,7 @@ HEADERS = {
 
 IST = pytz.timezone("Asia/Kolkata")
 
-TRADE_START = dtime(9, 16)
+TRADE_START = dtime(9, 14)
 TRADE_END   = dtime(15, 20)
 
 TARGET_POINTS = 35
@@ -484,7 +484,7 @@ def check_mtm_and_kill_switch():
                         "PROFIT EXIT",
                         "EXIT",
                         str(telemetry.get('ce_ltp')),
-                        pnl,
+                        ce_state["pnl"],
                         combined_pnl,
                         ce_state["lot"],
                         users,
@@ -528,7 +528,7 @@ def check_mtm_and_kill_switch():
                         "PROFIT EXIT",
                         "EXIT",
                         str(telemetry.get('pe_ltp')),
-                        pnl,
+                        pe_state["pnl"],
                         combined_pnl,
                         pe_state["lot"],
                         users,
@@ -581,7 +581,7 @@ def handle_leg(name, token, candle, state, ltp, vwap):
 
             exit_price = ltp
 
-            pnl = (exit_price - state["entry_price"]) * LOTSIZE * state["lot"]
+            pnl = (exit_price - state["entry_price"]) * LOTSIZE
 
             state["pnl"] += pnl
 
@@ -647,7 +647,7 @@ def handle_leg(name, token, candle, state, ltp, vwap):
         if close < vwap:
             exit_price = ltp
 
-            pnl = (exit_price - state["entry_price"]) * LOTSIZE * state["lot"]
+            pnl = (exit_price - state["entry_price"]) * LOTSIZE
 
             state["pnl"] += pnl
 
