@@ -44,6 +44,13 @@ NIFTY VWAP EMA5 OPTION BUYING
 
 This strategy is an intraday NIFTY option buying system that uses the NIFTY index for signal generation and fixed CE/PE option contracts for execution. At 09:19 AM, the CE and PE strikes whose premium is nearest to or above ₹250 are selected, and the same strikes are traded throughout the day. The strategy analyses 1-minute index candles using VWAP and EMA(5). From market open until 09:45 AM, the system waits for at least one EMA–VWAP crossover; however, if no crossover occurs before 09:45 AM, trading becomes enabled regardless. A bullish entry is triggered when an index candle closes above VWAP while EMA(5) remains above VWAP, resulting in a one-lot CE buy, whereas a bearish entry is triggered when an index candle closes below VWAP while EMA(5) remains below VWAP, resulting in a one-lot PE buy. Trade management is handled on the option premium chart itself, where each position uses a fixed stop loss of 25 points and a trailing profit mechanism starting at +35 points with trailing increments of 10 points. If a trade exits through the trailing mechanism, re-entry is allowed only after the index price touches VWAP again or a fresh EMA–VWAP crossover occurs, followed by a valid setup confirmation. Additionally, any active position is forcefully exited if the index price touches VWAP or if EMA crosses VWAP against the active trade direction. The system also enforces strict daily MTM risk management: all trades are immediately closed and trading is disabled for the remainder of the day once either a total profit of ₹5,000 or a total loss of ₹2,500 is reached.
 
+
+
+NIFTY VWAP FUTURE BASED OPTION BUYING
+
+
+This intraday strategy uses the Nifty Current Month Futures VWAP as the primary signal generator while executing trades in options. At the close of the first 1-minute candle after market open, the ATM CE and PE strikes are identified and fixed for the entire trading day. Thereafter, on every 1-minute candle close, if the Nifty Futures candle closes above VWAP, a long position is taken in the ATM CE (or maintained if already active), and if it closes below VWAP, any CE position is exited. Similarly, when the futures candle closes below VWAP, a long position is taken in the ATM PE, and if it later closes above VWAP, the PE position is exited. The strategy continuously aligns option positions with the prevailing VWAP direction of Nifty Futures, allowing immediate switching between CE and PE when the signal reverses. A tick-wise MTM monitor enforces strict risk management by exiting all open positions and disabling further trading for the day whenever the cumulative profit or loss reaches ₹3,000 or -₹3,000, respectively.
+
 google sheet logging
 
 vwap option buying -- not done
@@ -111,3 +118,7 @@ def on_option_candle(token, t, row):
 
 
  """
+
+
+
+

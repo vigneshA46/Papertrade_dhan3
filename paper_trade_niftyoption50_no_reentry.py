@@ -16,6 +16,8 @@ from signal_emitter import emit_signal
 #from tests.test_order import get_today_deployments, group_users_by_broker
 import asyncio
 from find_instrument import FindInstrument
+import pandas as pd
+
 
 
 # =========================
@@ -50,7 +52,7 @@ PE_TARGET_POINTS = 50
 
 IST = pytz.timezone("Asia/Kolkata")
 
-TRADE_START = dtime(9, 16)
+TRADE_START = dtime(9, 15)
 TRADE_END   = dtime(15, 20)
 
 TARGET_POINTS = 50
@@ -373,7 +375,29 @@ def init_state():
 # =========================
 
 
+def get_nearest_nifty_fut(df, trade_date):
+    futs = df[
+        (df["INSTRUMENT"] == "FUTIDX") &
+        (df["UNDERLYING_SYMBOL"] == SYMBOL)
+    ].copy()
+
+
+    futs["SM_EXPIRY_DATE"] = pd.to_datetime(futs["SM_EXPIRY_DATE"])
+    futs = futs[futs["SM_EXPIRY_DATE"] >= today]
+
+    fut = futs.sort_values("SM_EXPIRY_DATE").iloc[0]
+    return fut
+
+
+
+
 wait_for_start()
+
+
+fut=get_nearest_nifty_fut(fno_df , today)
+
+FUT_ID = str(fut["SECURITY_ID"])
+
 
 print("\n🚀 NIFTY OPTION BUYING STARTED\n")
 threading.Thread(target=trade_log_worker, daemon=True).start()
@@ -447,32 +471,6 @@ PE_ID = str(pe_row["SECURITY_ID"])
 
 print("CE :", CE_ID)
 print("PE :", PE_ID)
-
-builders = {
-    CE_ID: OneMinuteCandleBuilder(),
-    PE_ID: OneMinuteCandleBuilder()
-}
-
-
-# Log CE leg
-logtradeleg(
-    COMMON_ID,
-    "CE",
-    f"NIFTY CE {ATM}",
-    ATM,
-    str(today),
-    CE_ID
-)
-
-# Log PE leg
-logtradeleg(
-    COMMON_ID,
-    "PE",
-    f"NIFTY PE {ATM}",
-    ATM,
-    str(today),
-    PE_ID
-)
 
 
 # =========================
@@ -822,6 +820,8 @@ def on_message(msg):
 # =========================
 
 SUBSCRIBE_TOKENS = []
+
+SUBSCRIBE_TOKENS.append(str(FUT_ID))
 
 for i in range(-20, 21):
 
