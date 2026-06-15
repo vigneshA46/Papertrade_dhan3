@@ -2,6 +2,7 @@ import time
 import pytz
 import requests
 from datetime import datetime, time as dtime
+from datetime import timedelta
 from dotenv import load_dotenv
 import os
 from dhanhq import MarketFeed
@@ -315,7 +316,8 @@ def init_state():
 
         # NEW
         "enter_now": False,
-        "exit_now": False
+        "exit_now": False,
+        "entry_after": None,
     }
 
 def update_pnl_tickwise(state, ltp):
@@ -586,6 +588,7 @@ def handle_future_candle(candle, vwap):
             pe_state["exit_now"] = True
 
         if not ce_state["position"] and not ce_state["enter_now"] and not ce_state["trading_disabled"]:
+            ce_state["entry_after"] = datetime.now() + timedelta(seconds=2)
             ce_state["enter_now"] = True
 
     # ===================================
@@ -599,6 +602,7 @@ def handle_future_candle(candle, vwap):
             ce_state["exit_now"] = True
 
         if not pe_state["position"] and not pe_state["enter_now"] and not pe_state["trading_disabled"]:
+            pe_state["entry_after"] = datetime.now() + timedelta(seconds=2)
             pe_state["enter_now"] = True
 
 
@@ -670,8 +674,11 @@ def on_message(msg):
 
     if token == str(CE_ID):
 
-        if ce_state["enter_now"]:
-
+        if (
+          ce_state["enter_now"]
+          and ce_state["entry_after"]
+          and datetime.now() >= ce_state["entry_after"]
+        ):
             ce_state["entry_price"] = ltp
             ce_state["last_price"] = ltp
 
@@ -713,6 +720,8 @@ def on_message(msg):
 
             ce_state["enter_now"] = False
             ce_state["position"] = True
+            ce_state["entry_after"] = None
+
 
 
 
@@ -769,7 +778,11 @@ def on_message(msg):
 
 
     if token == str(PE_ID):
-        if pe_state["enter_now"]:
+        if (
+            pe_state["enter_now"]
+            and pe_state["entry_after"]
+            and datetime.now() >= pe_state["entry_after"]
+            ):
 
             pe_state["entry_price"] = ltp
             pe_state["last_price"] = ltp
@@ -812,6 +825,8 @@ def on_message(msg):
 
             pe_state["enter_now"] = False
             pe_state["position"] = True
+            pe_state["entry_after"] = None
+
 
 
         if pe_state["exit_now"]:
