@@ -61,7 +61,6 @@ def on_message(msg):
     try:
 
         token = str(msg["security_id"])
-
         publish(token, msg)
 
 

@@ -51,6 +51,13 @@ NIFTY VWAP FUTURE BASED OPTION BUYING
 
 This intraday strategy uses the Nifty Current Month Futures VWAP as the primary signal generator while executing trades in options. At the close of the first 1-minute candle after market open, the ATM CE and PE strikes are identified and fixed for the entire trading day. Thereafter, on every 1-minute candle close, if the Nifty Futures candle closes above VWAP, a long position is taken in the ATM CE (or maintained if already active), and if it closes below VWAP, any CE position is exited. Similarly, when the futures candle closes below VWAP, a long position is taken in the ATM PE, and if it later closes above VWAP, the PE position is exited. The strategy continuously aligns option positions with the prevailing VWAP direction of Nifty Futures, allowing immediate switching between CE and PE when the signal reverses. A tick-wise MTM monitor enforces strict risk management by exiting all open positions and disabling further trading for the day whenever the cumulative profit or loss reaches ₹3,000 or -₹3,000, respectively.
 
+
+NIFTY PIVOT FIBONACCI 
+
+This is a NIFTY intraday option buying strategy that operates on the 5-minute timeframe. At 09:20 AM, the live NIFTY option chain is fetched, and one Call (CE) and one Put (PE) strike with an LTP less than or equal to ₹90 are selected and fixed for the entire trading session. The selected CE and PE charts are analyzed independently using the 9-period Exponential Moving Average (EMA 9) and Fibonacci Pivot levels. A buy entry is triggered when a 5-minute candle closes above EMA 9 and the following candle retraces to retest the EMA, at which point the trade is executed immediately at the live tick. The profit target for each trade is the next Fibonacci Pivot resistance level (such as Pivot, R1, R2, or R3, depending on the entry price), while the stop loss is dynamically maintained at 5 points below the current EMA 9. After a trade exits, re-entry is allowed whenever a fresh valid setup is formed on the same chart. A combined daily profit target of ₹2,500 is maintained across both CE and PE positions, and once this target is achieved, all open positions are closed and no further trades are taken for the remainder of the trading day.
+
+
+
 google sheet logging
 
 vwap option buying -- not done

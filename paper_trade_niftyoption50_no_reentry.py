@@ -414,6 +414,7 @@ idx = dhan.intraday_minute_data(
     to_date=today
 )
 
+
 data = idx.get("data", {})
 
 opens = data.get("open", [])
