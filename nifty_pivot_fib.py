@@ -1,7 +1,7 @@
 import time
 import pytz
 import requests
-from datetime import datetime, time as dtime
+from datetime import datetime,date, time as dtime
 from datetime import timedelta
 from dotenv import load_dotenv
 import os
@@ -44,6 +44,10 @@ COMMON_ID = "3ff84201-7e4d-4e8d-8308-8241b1bca093"
 SYMBOL = "NIFTY"
 OPTION_SELECTION_LTP = 90
 
+MARKET_OPEN = dtime(9, 15)
+MARKET_CLOSE = dtime(15, 30)
+
+
 
 load_dotenv()
 
@@ -77,6 +81,29 @@ telemetry = {
     "pe_pnl": 0
 }
 
+
+# ======================================
+# NSE HOLIDAYS (Till 31-Dec-2026)
+# ======================================
+
+NSE_HOLIDAYS = {
+    date(2026, 1, 15),
+    date(2026, 1, 26),
+    date(2026, 3, 3),
+    date(2026, 3, 26),
+    date(2026, 3, 31),
+    date(2026, 4, 3),
+    date(2026, 4, 14),
+    date(2026, 5, 1),
+    date(2026, 5, 28),
+    date(2026, 6, 26),
+    date(2026, 9, 14),
+    date(2026, 10, 2),
+    date(2026, 10, 20),
+    date(2026, 11, 10),
+    date(2026, 11, 24),
+    date(2026, 12, 25),
+}
 
 # =========================
 # LOGIN
@@ -410,43 +437,38 @@ def init_state():
 
         # EMA
         "candles": [],
-        "ema9": None
+        "ema9": None,
+        "pivot": None,
+        
+        "r1": None,
+        "r2": None,
+        "r3": None,
+        "s1": None,
+        "s2": None,
+        "s3": None,
     }
 
 
+def load_history(security_id, candle_count=10):
 
-def get_ema_bootstrap_window(minutes=51):
-
-    now = datetime.now(IST)
-
-    end_time = now.replace(second=0, microsecond=0)
-
-    start_time = end_time - timedelta(minutes=minutes)
-
-    print("EMA Bootstrap Window:")
-    print(start_time, end_time)
-
-    return start_time, end_time
-
-
-
-def load_history(security_id):
-
-    start_time, end_time = get_ema_bootstrap_window()
-
-    data = dhan.intraday_minute_data(
-        security_id=security_id,
-        exchange_segment="NSE_FNO",
-        instrument_type="OPTIDX",
-        from_date=start_time.strftime("%Y-%m-%d"),
-        to_date=end_time.strftime("%Y-%m-%d"),
+    start_time, end_time = get_market_history_window(
+        candle_count=candle_count,
         interval=5
     )
 
-    print("Raw intraday data:")
-    print(data)
+    print("\n========== HISTORY WINDOW ==========")
+    print("From :", start_time)
+    print("To   :", end_time)
+    print("====================================\n")
 
-    candles = []
+    data = dhan.intraday_minute_data(
+        security_id=str(security_id),
+        exchange_segment="NSE_FNO",
+        instrument_type="OPTIDX",
+        from_date=start_time.strftime("%Y-%m-%d %H:%M:%S"),
+        to_date=end_time.strftime("%Y-%m-%d %H:%M:%S"),
+        interval=5
+    )
 
     raw = data.get("data", {})
 
@@ -457,35 +479,45 @@ def load_history(security_id):
     volumes = raw.get("volume", [])
     timestamps = raw.get("timestamp", [])
 
+    candles = []
+
     for i in range(len(timestamps)):
 
         ts = datetime.fromtimestamp(timestamps[i], IST)
 
-        if start_time <= ts <= end_time:
+        candles.append({
+            "timestamp": timestamps[i],
+            "datetime": ts,
+            "open": float(opens[i]),
+            "high": float(highs[i]),
+            "low": float(lows[i]),
+            "close": float(closes[i]),
+            "volume": float(volumes[i])
+        })
 
-            candles.append({
-                "timestamp": timestamps[i],
-                "open": opens[i],
-                "high": highs[i],
-                "low": lows[i],
-                "close": closes[i],
-                "volume": volumes[i]
-            })
+    print(f"Loaded {len(candles)} historical candles")
 
-    return candles[-51:]
+    return candles[-candle_count:]
 
 
 def update_ema(state, candle):
 
     state["candles"].append(candle)
-    if len(state["candles"]) > 200:
+
+    if len(state["candles"]) > 15:
         state["candles"].pop(0)
+
     closes = [
-        float(c["close"])
+        c["close"]
         for c in state["candles"]
     ]
-    state["ema50"] = calculate_ema(closes)
-    return state["ema50"]
+
+    state["ema9"] = calculate_ema(
+        closes,
+        period=9
+    )
+
+    return state["ema9"]
 
 
 def calculate_ema(closes, period=9):
@@ -503,6 +535,248 @@ def calculate_ema(closes, period=9):
     return ema
 
 
+def is_market_holiday(check_date):
+    """
+    Returns True if the given date is
+    a weekend or NSE holiday.
+    """
+
+    if isinstance(check_date, datetime):
+        check_date = check_date.date()
+
+    # Saturday = 5, Sunday = 6
+    if check_date.weekday() >= 5:
+        return True
+
+    return check_date in NSE_HOLIDAYS
+
+def get_previous_trading_day(current_date):
+    """
+    Returns the previous market trading day.
+    """
+
+    if isinstance(current_date, datetime):
+        current_date = current_date.date()
+
+    current_date -= timedelta(days=1)
+
+    while is_market_holiday(current_date):
+        current_date -= timedelta(days=1)
+
+    return current_date
+
+def get_required_market_minutes(candle_count=10, interval=5):
+    """
+    Converts candle count into
+    market trading minutes.
+    """
+
+    return candle_count * interval
+
+def count_market_minutes_back(end_time, minutes):
+    """
+    Walk backwards through MARKET trading minutes only.
+    Skips weekends, NSE holidays and non-market hours.
+    """
+
+    current = end_time
+    remaining = minutes
+
+    while remaining > 0:
+
+        market_open = current.replace(
+            hour=9,
+            minute=15,
+            second=0,
+            microsecond=0
+        )
+
+        available = int(
+            (current - market_open).total_seconds() / 60
+        )
+
+        if available >= remaining:
+            return current - timedelta(minutes=remaining)
+
+        remaining -= available
+
+        prev_day = get_previous_trading_day(current)
+
+        current = IST.localize(
+            datetime.combine(prev_day, MARKET_CLOSE)
+        )
+
+    return current
+
+def get_last_market_time():
+    """
+    Returns the latest valid market timestamp.
+
+    Handles:
+    - Before market open
+    - During market
+    - After market
+    - Weekends
+    - NSE holidays
+    """
+
+    now = datetime.now(IST)
+
+    # Holiday / Weekend
+    if is_market_holiday(now):
+
+        prev_day = get_previous_trading_day(now)
+
+        return IST.localize(
+            datetime.combine(prev_day, MARKET_CLOSE)
+        )
+
+    market_open = now.replace(
+        hour=9,
+        minute=15,
+        second=0,
+        microsecond=0
+    )
+
+    market_close = now.replace(
+        hour=15,
+        minute=30,
+        second=0,
+        microsecond=0
+    )
+
+    # Before market opens
+    if now < market_open:
+
+        prev_day = get_previous_trading_day(now)
+
+        return IST.localize(
+            datetime.combine(prev_day, MARKET_CLOSE)
+        )
+
+    # During market
+    if market_open <= now <= market_close:
+        return now.replace(second=0, microsecond=0)
+
+    # After market closes
+    return market_close
+
+def get_market_history_window(candle_count=10, interval=5):
+    """
+    Returns the history window required
+    to fetch the last completed market candles.
+    """
+
+    end_time = get_last_market_time()
+
+    required_minutes = candle_count * interval
+
+    start_time = count_market_minutes_back(
+        end_time,
+        required_minutes
+    )
+
+    return start_time, end_time
+
+def get_previous_day_ohlc(security_id):
+
+    previous_day = get_previous_trading_day(datetime.now(IST))
+
+    # Build NAIVE datetimes (Dhan expects this)
+    start_time = datetime.combine(previous_day, MARKET_OPEN)
+    end_time = datetime.combine(previous_day, MARKET_CLOSE)
+
+    print("\n========== PREVIOUS DAY OHLC ==========")
+    print("From :", start_time)
+    print("To   :", end_time)
+    print("=======================================\n")
+
+    data = dhan.intraday_minute_data(
+        security_id=str(security_id),
+        exchange_segment="NSE_FNO",
+        instrument_type="OPTIDX",
+        from_date=start_time.strftime("%Y-%m-%d %H:%M"),
+        to_date=end_time.strftime("%Y-%m-%d %H:%M"),
+        interval=5
+    )
+
+    print("Previous day data")
+    print(data)
+
+    raw = data.get("data")
+
+    if not isinstance(raw, dict):
+        print("Historical API Error")
+        print(data)
+        return None
+
+    highs = raw.get("high", [])
+    lows = raw.get("low", [])
+    closes = raw.get("close", [])
+
+    if not highs:
+        return None
+
+    return {
+        "high": max(highs),
+        "low": min(lows),
+        "close": closes[-1]
+    }
+
+def calculate_fibonacci_pivot(ohlc):
+    """
+    Calculates Daily Fibonacci Pivot Levels.
+    """
+
+    high = float(ohlc["high"])
+    low = float(ohlc["low"])
+    close = float(ohlc["close"])
+
+    pivot = (high + low + close) / 3
+    rng = high - low
+
+    return {
+        "pivot": pivot,
+
+        "r1": pivot + (rng * 0.382),
+        "r2": pivot + (rng * 0.618),
+        "r3": pivot + rng,
+
+        "s1": pivot - (rng * 0.382),
+        "s2": pivot - (rng * 0.618),
+        "s3": pivot - rng,
+    }
+
+
+def initialize_fibonacci_pivot(state, security_id):
+
+    ohlc = get_previous_day_ohlc(security_id)
+
+    if ohlc is None:
+        print("Unable to fetch previous day OHLC")
+        return
+
+    levels = calculate_fibonacci_pivot(ohlc)
+
+    state.update(levels)
+
+    print("\n========== FIBONACCI PIVOT ==========")
+    print("Previous Day OHLC")
+    print(ohlc)
+
+    print()
+
+    print(f"Pivot : {state['pivot']:.2f}")
+
+    print(f"R1    : {state['r1']:.2f}")
+    print(f"R2    : {state['r2']:.2f}")
+    print(f"R3    : {state['r3']:.2f}")
+
+    print(f"S1    : {state['s1']:.2f}")
+    print(f"S2    : {state['s2']:.2f}")
+    print(f"S3    : {state['s3']:.2f}")
+
+    print("=====================================\n")
 
 # =========================
 # START
@@ -567,10 +841,60 @@ print(mindata)
  
 """
 
+ce_state["candles"] = load_history(
+    ce_security_id,
+    candle_count=10
+)
 
-ce_state["candles"] = load_history(str(ce_security_id))
+print("\nCE Historical Candles\n")
 
-print("candles")
-print(ce_state["candles"])
+for candle in ce_state["candles"]:
+    print(candle)
+
+pe_state["candles"] = load_history(
+    pe_security_id,
+    candle_count=10
+)
+
+print("\nPE Historical Candles\n")
+
+for candle in pe_state["candles"]:
+    print(candle)
+ 
+ce_state["ema9"] = calculate_ema(
+    [c["close"] for c in ce_state["candles"]],
+    period=9
+)
+
+initialize_fibonacci_pivot(
+    ce_state,
+    ce_security_id
+)
+
+pe_state["ema9"] = calculate_ema(
+    [c["close"] for c in pe_state["candles"]],
+    period=9
+)
+
+initialize_fibonacci_pivot(
+    pe_state,
+    pe_security_id
+)
+
+ce_last_candle = ce_state["candles"][-1]
+pe_last_candle = pe_state["candles"][-1]
+
+print("CE Strike", ce_strike)
+print(
+    f"CE EMA9 ({ce_last_candle['datetime'].strftime('%d-%m-%Y %H:%M')}) : "
+    f"{ce_state['ema9']:.2f}"
+)
+
+
+print("PE Strike", pe_strike)
+print(
+    f"PE EMA9 ({pe_last_candle['datetime'].strftime('%d-%m-%Y %H:%M')}) : "
+    f"{pe_state['ema9']:.2f}"
+)
 
  
