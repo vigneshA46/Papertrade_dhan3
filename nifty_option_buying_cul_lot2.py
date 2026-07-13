@@ -60,6 +60,8 @@ PE_TARGET_POINTS = 50
 LOTSIZE = 65
 
 RECOVERY_TRIGGER = -5000
+LEG_RECOVERY_TRIGGER = -5000
+LEG_RECOVERY_PROFIT = 5000
 
 recovery_mode = False
 
@@ -400,7 +402,12 @@ def init_state():
         "symbol": None,
         "rearm_required": False,
         "moment":0.0,
-        "strike":None
+        "strike":None,
+
+        # -------- Recovery Mode --------
+        "recovery_active": False,
+        "recovery_trigger": None,
+        "recovery_target": None
 
     }
 
@@ -756,7 +763,106 @@ def tick_exit_check(name, token, state, ltp):
         if state["lot"] < 15:
             state["lot"] += 1
 
+def leg_recovery_check(name, token, state, ltp):
+    global combined_pnl
 
+    # Current running pnl
+    running = 0
+
+    if state["position"]:
+        running = (
+            (ltp - state["entry_price"])
+            * LOTSIZE
+            * state["lot"]
+        )
+
+    current_total = state["pnl"] + running
+
+    # -----------------------------------
+    # Activate Recovery
+    # -----------------------------------
+
+    if (
+        not state["recovery_active"]
+        and current_total <= LEG_RECOVERY_TRIGGER
+    ):
+
+        state["recovery_active"] = True
+        state["recovery_trigger"] = current_total
+        state["recovery_target"] = (
+            current_total + LEG_RECOVERY_PROFIT
+        )
+
+        print(
+            f"⚠ {name} Recovery Activated | "
+            f"Trigger={current_total:.2f} "
+            f"Target={state['recovery_target']:.2f}"
+        )
+
+    # -----------------------------------
+    # Wait until recovered
+    # -----------------------------------
+
+    if (
+        state["recovery_active"]
+        and state["position"]
+        and current_total >= state["recovery_target"]
+    ):
+
+        print(f"✅ {name} Recovery Exit")
+
+        exit_price = ltp
+
+        pnl = (
+            (exit_price - state["entry_price"])
+            * LOTSIZE
+            * state["lot"]
+        )
+
+        state["pnl"] += pnl
+        combined_pnl += pnl
+
+        deployments = get_today_deployments()
+        users = group_users_by_broker(deployments)
+
+        run_async(
+            emit_signal(
+                build_payload(
+                    name,
+                    "SELL",
+                    token,
+                    "Recovery Exit",
+                    "EXIT",
+                    ltp,
+                    state["pnl"],
+                    combined_pnl,
+                    state["lot"],
+                    users,
+                    state["strike"]
+                )
+            )
+        )
+
+        log_trade_event(
+            event_type="EXIT",
+            leg_name=name,
+            token=token,
+            symbol=SYMBOL,
+            side="SELL",
+            lot=state["lot"],
+            price=exit_price,
+            reason="RECOVERY EXIT",
+            pnl=state["pnl"],
+            cum_pnl=combined_pnl
+        )
+
+        state["position"] = False
+        state["rearm_required"] = True
+        state["lot"] = 2
+
+        state["recovery_active"] = False
+        state["recovery_trigger"] = None
+        state["recovery_target"] = None
 
 
 def universal_exit_check(ce_ltp, pe_ltp):
@@ -810,7 +916,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
             ce_state["pnl"] += pnl
             combined_pnl += pnl
-            
+
             run_async(emit_signal(build_payload("CE", "SELL", CE_ID , "exit","EXIT", ce_ltp, ce_state["pnl"], combined_pnl,ce_state["lot"],users,ce_state["strike"])))
             log_trade_event(
                 event_type="EXIT",
@@ -976,16 +1082,29 @@ def on_message(msg):
     if token == CE_ID:
         tick_exit_check("CE", token, ce_state, ltp)
         telemetry["ce_ltp"] = float(ltp or 0)
+        leg_recovery_check(
+            "CE",
+            CE_ID,
+            ce_state,
+            telemetry["ce_ltp"]
+        )
 
     if token == PE_ID:
         tick_exit_check("PE", token, pe_state, ltp)
         telemetry["pe_ltp"] = float(ltp or 0)  
+        leg_recovery_check(
+            "PE",
+            PE_ID,
+            pe_state,
+            telemetry["pe_ltp"]
+            )
 
     # =========================
     # RUN UNIVERSAL EXIT (TICK LEVEL)
     # =========================
     if "ce_ltp" in telemetry and "pe_ltp" in telemetry:
         universal_exit_check(telemetry["ce_ltp"], telemetry["pe_ltp"])
+
 
     # =========================
     # CANDLE LOGIC
@@ -1035,3 +1154,5 @@ def on_tick(token, msg):
 
 for t in TOKENS:
     subscribe(t, on_tick)
+
+ 
