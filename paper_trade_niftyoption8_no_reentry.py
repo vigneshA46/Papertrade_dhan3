@@ -601,11 +601,16 @@ def handle_leg(name, token, candle, state, ltp):
 
         state["pnl"] += pnl
         combined_pnl += pnl
+        
+        deployments = get_today_deployments()
+        users = group_users_by_broker(deployments)
+
+
 
         print("🔴 EXIT", name, exit_price)
 
+        run_async(emit_signal(build_payload(name, "SELL", token , "exit","EXIT", ltp, pnl, combined_pnl, state["lot"],users)))
         log_trade_event(
-            
             event_type="EXIT",
             leg_name=name,
             token=token,
