@@ -20,10 +20,13 @@ import threading
 
 #import Nifty_option_buying3k as strategy9
 #import Nifty_option_buying_tsl as strategy11
+import option_chain_manager
 
 import paper_trade_niftyoption50_no_reentry as strategy1
 
-import paper_trade_niftyoption8_no_reentry as strategy8
+option_chain_manager.update_option_chain()
+
+#import paper_trade_niftyoption8_no_reentry as strategy8
 import nifty_option_buying_cul_lot2 as strategy12
 
 #import vwap_futures_buying as strategy7

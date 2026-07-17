@@ -17,6 +17,11 @@ import asyncio
 from find_instrument import FindInstrument
 from option_chain_cache import set_option_chain, get_option_chain
 
+from option_chain_manager import get_option_chain
+
+
+
+
 
 # =========================
 # CONFIG
@@ -420,6 +425,9 @@ wait_for_start()
 print("\n🚀 NIFTY OPTION BUYING 50 CUMULATIVE LTP STARTED\n")
 
 threading.Thread(target=trade_log_worker, daemon=True).start()
+
+oc1 = get_option_chain()
+print("option chain fetched:", oc1)
 
 # =========================
 # INDEX FIRST CANDLE

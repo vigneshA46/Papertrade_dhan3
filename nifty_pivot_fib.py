@@ -335,7 +335,6 @@ def wait_for_start():
 def calculate_atm(price, step=50):
     return int(round(price / step) * step)
 
-
 def get_next_expiry():
     """
     Returns current/next NIFTY expiry date
@@ -446,8 +445,13 @@ def init_state():
         "s1": None,
         "s2": None,
         "s3": None,
-    }
 
+        # Strategy State
+        "signal_state": "IDLE",      # IDLE -> WAITING_RETEST -> IN_POSITION
+        "signal_candle": None,       # Candle which closed above EMA
+        "target": None,              # Fibonacci target
+        "stoploss": None,            # Dynamic EMA SL
+    }
 
 def load_history(security_id, candle_count=10):
 
@@ -499,27 +503,155 @@ def load_history(security_id, candle_count=10):
 
     return candles[-candle_count:]
 
-
 def update_ema(state, candle):
+
+    multiplier = 2 / (9 + 1)
+
+    previous_ema = state["ema9"]
+
+    close = candle["close"]
+
+    new_ema = (
+        (close - previous_ema) * multiplier
+    ) + previous_ema
+
+    state["ema9"] = new_ema
 
     state["candles"].append(candle)
 
-    if len(state["candles"]) > 15:
+    if len(state["candles"]) > 200:
         state["candles"].pop(0)
 
-    closes = [
-        c["close"]
-        for c in state["candles"]
-    ]
+    return new_ema
 
-    state["ema9"] = calculate_ema(
-        closes,
-        period=9
-    )
+def detect_buy_signal(state, candle):
+    """
+    Detects a fresh bullish setup.
 
-    return state["ema9"]
+    Condition:
+    Candle closes above EMA9.
+    """
 
+    if state["position"]:
+        return
 
+    if state["signal_state"] != "IDLE":
+        return
+
+    if candle["close"] > state["ema9"]:
+
+        state["signal_state"] = "WAITING_RETEST"
+
+        state["signal_candle"] = candle
+
+        print(
+            f"✅ Signal Generated @ {candle['datetime']} "
+            f"Close={candle['close']:.2f} "
+            f"EMA={state['ema9']:.2f}"
+        )
+
+def check_retest_entry(state, ltp):
+    """
+    Executes entry when price retraces
+    to EMA after a valid signal.
+    """
+
+    if state["signal_state"] != "WAITING_RETEST":
+        return False
+
+    ema = state["ema9"]
+
+    # Price touched EMA
+    if ltp <= ema:
+
+        state["position"] = True
+
+        state["signal_state"] = "IN_POSITION"
+
+        state["entry_price"] = ltp
+
+        state["entry_time"] = datetime.now(IST)
+
+        state["stoploss"] = ema - 5
+
+        state["target"] = get_fibonacci_target(
+            state,
+            ltp
+        )
+
+        print("\n===============================")
+        print("BUY EXECUTED")
+        print(f"Entry     : {ltp:.2f}")
+        print(f"EMA       : {ema:.2f}")
+        print(f"StopLoss  : {state['stoploss']:.2f}")
+        print(f"Target    : {state['target']:.2f}")
+        print("===============================\n")
+
+        return True
+
+    return False
+
+def exit_position(state, reason, exit_price):
+    """
+    Closes the current position and
+    prepares the state for next setup.
+    """
+
+    pnl = (exit_price - state["entry_price"]) * LOTSIZE * state["lot"]
+
+    print("\n===============================")
+    print("EXIT")
+    print(f"Reason     : {reason}")
+    print(f"Entry      : {state['entry_price']:.2f}")
+    print(f"Exit       : {exit_price:.2f}")
+    print(f"PnL        : {pnl:.2f}")
+    print("===============================\n")
+
+    state["position"] = False
+    state["signal_state"] = "IDLE"
+
+    state["entry_price"] = None
+    state["entry_time"] = None
+
+    state["target"] = None
+    state["stoploss"] = None
+
+    state["signal_candle"] = None
+
+    #state["lot"] += 1
+
+def manage_open_position(state, ltp):
+    """
+    Monitors an open trade.
+    """
+
+    if not state["position"]:
+        return
+
+    # ---------- Target ----------
+
+    if ltp >= state["target"]:
+
+        exit_position(
+            state,
+            "TARGET",
+            ltp
+        )
+
+        return
+
+    # ---------- Stoploss ----------
+
+    if ltp <= state["stoploss"]:
+
+        exit_position(
+            state,
+            "STOPLOSS",
+            ltp
+        )
+
+        return
+        
 def calculate_ema(closes, period=9):
 
     if len(closes) < period:
@@ -533,7 +665,6 @@ def calculate_ema(closes, period=9):
         ema = ((close - ema) * multiplier) + ema
 
     return ema
-
 
 def is_market_holiday(check_date):
     """
@@ -677,7 +808,7 @@ def get_market_history_window(candle_count=10, interval=5):
     )
 
     return start_time, end_time
-
+""" 
 def get_previous_day_ohlc(security_id):
 
     previous_day = get_previous_trading_day(datetime.now(IST))
@@ -723,6 +854,83 @@ def get_previous_day_ohlc(security_id):
         "close": closes[-1]
     }
 
+"""
+
+def get_previous_day_ohlc(security_id):
+    """
+    Fetches previous trading day's OHLC from 5-minute candles.
+    This is much more reliable than requesting a single day's window.
+    """
+
+    today = datetime.now(IST).date()
+    previous_day = get_previous_trading_day(today)
+
+    # Fetch last 3 calendar days
+    from_date = previous_day - timedelta(days=2)
+
+    start = datetime.combine(from_date, MARKET_OPEN)
+    end = datetime.combine(today, MARKET_CLOSE)
+
+    print("\n========== FETCHING PREVIOUS DAY DATA ==========")
+    print("From :", start)
+    print("To   :", end)
+    print("===============================================\n")
+
+    data = dhan.intraday_minute_data(
+        security_id=str(security_id),
+        exchange_segment="NSE_FNO",
+        instrument_type="OPTIDX",
+        from_date=start.strftime("%Y-%m-%d %H:%M:%S"),
+        to_date=end.strftime("%Y-%m-%d %H:%M:%S"),
+        interval=5
+    )
+
+    if data.get("status") != "success":
+        print(data)
+        return None
+
+    raw = data["data"]
+
+    highs = raw["high"]
+    lows = raw["low"]
+    closes = raw["close"]
+    timestamps = raw["timestamp"]
+
+    previous_day_high = []
+    previous_day_low = []
+    previous_day_close = []
+
+    for i in range(len(timestamps)):
+
+        candle_time = datetime.fromtimestamp(
+            timestamps[i],
+            IST
+        )
+
+        if candle_time.date() == previous_day:
+
+            previous_day_high.append(float(highs[i]))
+            previous_day_low.append(float(lows[i]))
+            previous_day_close.append(float(closes[i]))
+
+    if len(previous_day_close) == 0:
+
+        print("No previous day candles found.")
+        return None
+
+    ohlc = {
+
+        "high": max(previous_day_high),
+
+        "low": min(previous_day_low),
+
+        "close": previous_day_close[-1]
+
+    }
+
+    return ohlc
+
+
 def calculate_fibonacci_pivot(ohlc):
     """
     Calculates Daily Fibonacci Pivot Levels.
@@ -747,36 +955,60 @@ def calculate_fibonacci_pivot(ohlc):
         "s3": pivot - rng,
     }
 
+def get_fibonacci_target(state, entry_price):
+    """
+    Returns the immediate next Fibonacci resistance
+    above the entry price.
+    """
+
+    levels = [
+        state["pivot"],
+        state["r1"],
+        state["r2"],
+        state["r3"]
+    ]
+
+    for level in levels:
+        if entry_price < level:
+            return level
+
+    return state["r3"]
 
 def initialize_fibonacci_pivot(state, security_id):
 
     ohlc = get_previous_day_ohlc(security_id)
 
     if ohlc is None:
-        print("Unable to fetch previous day OHLC")
+        print("Unable to calculate Fibonacci Pivot")
         return
 
     levels = calculate_fibonacci_pivot(ohlc)
 
     state.update(levels)
 
-    print("\n========== FIBONACCI PIVOT ==========")
+    print("\n========== FIBONACCI LEVELS ==========")
+
     print("Previous Day OHLC")
-    print(ohlc)
+    print("--------------------------------------")
+    print(f"High  : {ohlc['high']:.2f}")
+    print(f"Low   : {ohlc['low']:.2f}")
+    print(f"Close : {ohlc['close']:.2f}")
 
     print()
 
-    print(f"Pivot : {state['pivot']:.2f}")
+    print(f"Pivot : {levels['pivot']:.2f}")
 
-    print(f"R1    : {state['r1']:.2f}")
-    print(f"R2    : {state['r2']:.2f}")
-    print(f"R3    : {state['r3']:.2f}")
+    print(f"R1    : {levels['r1']:.2f}")
+    print(f"R2    : {levels['r2']:.2f}")
+    print(f"R3    : {levels['r3']:.2f}")
 
-    print(f"S1    : {state['s1']:.2f}")
-    print(f"S2    : {state['s2']:.2f}")
-    print(f"S3    : {state['s3']:.2f}")
+    print()
 
-    print("=====================================\n")
+    print(f"S1    : {levels['s1']:.2f}")
+    print(f"S2    : {levels['s2']:.2f}")
+    print(f"S3    : {levels['s3']:.2f}")
+
+    print("======================================\n")
 
 # =========================
 # START
@@ -866,6 +1098,8 @@ ce_state["ema9"] = calculate_ema(
     period=9
 )
 
+print("CE Fibonacci")
+
 initialize_fibonacci_pivot(
     ce_state,
     ce_security_id
@@ -875,6 +1109,8 @@ pe_state["ema9"] = calculate_ema(
     [c["close"] for c in pe_state["candles"]],
     period=9
 )
+
+print("PE Fibonacci")
 
 initialize_fibonacci_pivot(
     pe_state,

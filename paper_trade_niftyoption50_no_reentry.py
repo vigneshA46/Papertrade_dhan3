@@ -52,7 +52,7 @@ PE_TARGET_POINTS = 50
 
 IST = pytz.timezone("Asia/Kolkata")
 
-TRADE_START = dtime(9, 15)
+TRADE_START = dtime(9, 16)
 TRADE_END   = dtime(15, 20)
 
 TARGET_POINTS = 50
