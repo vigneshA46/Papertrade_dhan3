@@ -8,7 +8,7 @@ import os
 from dhanhq import MarketFeed
 from dhanhq import DhanContext, dhanhq
 from dhan_token import get_access_token
-from candle_builder import OneMinuteCandleBuilder
+from candle_builder import FiveMinuteCandleBuilder
 from find_security import load_fno_master, find_option_security
 import threading
 from dispatcher import subscribe
@@ -47,6 +47,10 @@ OPTION_SELECTION_LTP = 90
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
 
+CE_ID = None
+PE_ID = None
+
+combined_pnl = 0.0
 
 
 load_dotenv()
@@ -450,7 +454,10 @@ def init_state():
         "signal_state": "IDLE",      # IDLE -> WAITING_RETEST -> IN_POSITION
         "signal_candle": None,       # Candle which closed above EMA
         "target": None,              # Fibonacci target
-        "stoploss": None,            # Dynamic EMA SL
+        "stoploss": None,   
+        "waiting_retest": False,
+        "trend": None,
+        "last_ltp": None,
     }
 
 def load_history(security_id, candle_count=10):
@@ -524,134 +531,6 @@ def update_ema(state, candle):
 
     return new_ema
 
-def detect_buy_signal(state, candle):
-    """
-    Detects a fresh bullish setup.
-
-    Condition:
-    Candle closes above EMA9.
-    """
-
-    if state["position"]:
-        return
-
-    if state["signal_state"] != "IDLE":
-        return
-
-    if candle["close"] > state["ema9"]:
-
-        state["signal_state"] = "WAITING_RETEST"
-
-        state["signal_candle"] = candle
-
-        print(
-            f"✅ Signal Generated @ {candle['datetime']} "
-            f"Close={candle['close']:.2f} "
-            f"EMA={state['ema9']:.2f}"
-        )
-
-def check_retest_entry(state, ltp):
-    """
-    Executes entry when price retraces
-    to EMA after a valid signal.
-    """
-
-    if state["signal_state"] != "WAITING_RETEST":
-        return False
-
-    ema = state["ema9"]
-
-    # Price touched EMA
-    if ltp <= ema:
-
-        state["position"] = True
-
-        state["signal_state"] = "IN_POSITION"
-
-        state["entry_price"] = ltp
-
-        state["entry_time"] = datetime.now(IST)
-
-        state["stoploss"] = ema - 5
-
-        state["target"] = get_fibonacci_target(
-            state,
-            ltp
-        )
-
-        print("\n===============================")
-        print("BUY EXECUTED")
-        print(f"Entry     : {ltp:.2f}")
-        print(f"EMA       : {ema:.2f}")
-        print(f"StopLoss  : {state['stoploss']:.2f}")
-        print(f"Target    : {state['target']:.2f}")
-        print("===============================\n")
-
-        return True
-
-    return False
-
-def exit_position(state, reason, exit_price):
-    """
-    Closes the current position and
-    prepares the state for next setup.
-    """
-
-    pnl = (exit_price - state["entry_price"]) * LOTSIZE * state["lot"]
-
-    print("\n===============================")
-    print("EXIT")
-    print(f"Reason     : {reason}")
-    print(f"Entry      : {state['entry_price']:.2f}")
-    print(f"Exit       : {exit_price:.2f}")
-    print(f"PnL        : {pnl:.2f}")
-    print("===============================\n")
-
-    state["position"] = False
-    state["signal_state"] = "IDLE"
-
-    state["entry_price"] = None
-    state["entry_time"] = None
-
-    state["target"] = None
-    state["stoploss"] = None
-
-    state["signal_candle"] = None
-
-    #state["lot"] += 1
-
-def manage_open_position(state, ltp):
-    """
-    Monitors an open trade.
-    """
-
-    if not state["position"]:
-        return
-
-    # ---------- Target ----------
-
-    if ltp >= state["target"]:
-
-        exit_position(
-            state,
-            "TARGET",
-            ltp
-        )
-
-        return
-
-    # ---------- Stoploss ----------
-
-    if ltp <= state["stoploss"]:
-
-        exit_position(
-            state,
-            "STOPLOSS",
-            ltp
-        )
-
-        return
-        
 def calculate_ema(closes, period=9):
 
     if len(closes) < period:
@@ -695,14 +574,6 @@ def get_previous_trading_day(current_date):
         current_date -= timedelta(days=1)
 
     return current_date
-
-def get_required_market_minutes(candle_count=10, interval=5):
-    """
-    Converts candle count into
-    market trading minutes.
-    """
-
-    return candle_count * interval
 
 def count_market_minutes_back(end_time, minutes):
     """
@@ -808,53 +679,6 @@ def get_market_history_window(candle_count=10, interval=5):
     )
 
     return start_time, end_time
-""" 
-def get_previous_day_ohlc(security_id):
-
-    previous_day = get_previous_trading_day(datetime.now(IST))
-
-    # Build NAIVE datetimes (Dhan expects this)
-    start_time = datetime.combine(previous_day, MARKET_OPEN)
-    end_time = datetime.combine(previous_day, MARKET_CLOSE)
-
-    print("\n========== PREVIOUS DAY OHLC ==========")
-    print("From :", start_time)
-    print("To   :", end_time)
-    print("=======================================\n")
-
-    data = dhan.intraday_minute_data(
-        security_id=str(security_id),
-        exchange_segment="NSE_FNO",
-        instrument_type="OPTIDX",
-        from_date=start_time.strftime("%Y-%m-%d %H:%M"),
-        to_date=end_time.strftime("%Y-%m-%d %H:%M"),
-        interval=5
-    )
-
-    print("Previous day data")
-    print(data)
-
-    raw = data.get("data")
-
-    if not isinstance(raw, dict):
-        print("Historical API Error")
-        print(data)
-        return None
-
-    highs = raw.get("high", [])
-    lows = raw.get("low", [])
-    closes = raw.get("close", [])
-
-    if not highs:
-        return None
-
-    return {
-        "high": max(highs),
-        "low": min(lows),
-        "close": closes[-1]
-    }
-
-"""
 
 def get_previous_day_ohlc(security_id):
     """
@@ -930,7 +754,6 @@ def get_previous_day_ohlc(security_id):
 
     return ohlc
 
-
 def calculate_fibonacci_pivot(ohlc):
     """
     Calculates Daily Fibonacci Pivot Levels.
@@ -954,25 +777,6 @@ def calculate_fibonacci_pivot(ohlc):
         "s2": pivot - (rng * 0.618),
         "s3": pivot - rng,
     }
-
-def get_fibonacci_target(state, entry_price):
-    """
-    Returns the immediate next Fibonacci resistance
-    above the entry price.
-    """
-
-    levels = [
-        state["pivot"],
-        state["r1"],
-        state["r2"],
-        state["r3"]
-    ]
-
-    for level in levels:
-        if entry_price < level:
-            return level
-
-    return state["r3"]
 
 def initialize_fibonacci_pivot(state, security_id):
 
@@ -1010,6 +814,333 @@ def initialize_fibonacci_pivot(state, security_id):
 
     print("======================================\n")
 
+def reset_trade_state(state):
+    """
+    Clears strategy state after exit.
+    """
+
+    state["position"] = False
+    state["waiting_retest"] = False
+
+    state["entry_price"] = None
+    state["target"] = None
+    state["stoploss"] = None
+
+def check_breakout(state, candle , leg = "CE"):
+
+
+    token = CE_ID if leg == "CE" else PE_ID
+
+    if state["position"]:
+        return
+
+    if state["waiting_retest"]:
+        return
+
+    if candle["close"] > state["ema9"]:
+
+        state["waiting_retest"] = True
+        state["signal_candle"] = candle
+
+        print(
+            f"\n✅ Breakout detected "
+            f"Close={candle['close']:.2f} "
+            f"EMA={state['ema9']:.2f}"
+        )
+            
+
+
+def check_exit(state, ltp , leg = "CE"):
+
+    token = CE_ID if leg == "CE" else PE_ID
+
+
+    if not state["position"]:
+        return None
+
+    if ltp >= state["target"]:
+
+        print("🎯 Target Hit")
+        reset_trade_state(state)
+
+        deployments = get_today_deployments()
+        users = group_users_by_broker(deployments)
+
+        run_async(
+            emit_signal(
+                build_payload(
+                    leg,
+                    "SELL",
+                    str(CE_ID) if leg == "CE" else str(PE_ID),
+                    "SL EXIT",
+                    "EXIT",
+                    str(telemetry.get(f'{leg.lower()}_ltp')),
+                    state["pnl"],
+                    str(telemetry["pnl"]),
+                    state["lot"],
+                    users,
+                    strike = ce_strike if leg == "CE" else pe_strike
+                    )
+                )
+            )
+
+        log_trade_event(                
+            event_type="EXIT",
+            leg_name=leg,
+            token=token,
+            symbol=SYMBOL,
+            side="SELL",
+            lot=1,
+            price=telemetry.get('ce_ltp') if leg == "CE" else telemetry.get('pe_ltp'), 
+            reason="FORCE EXIT MTM",
+            pnl= ce_state["pnl"],
+            cum_pnl=str(telemetry["pnl"])
+            )
+
+        
+        return "TARGET"
+
+
+    if ltp <= state["entry_price"] - 5:
+
+        print("🛑 Stoploss Hit")
+        reset_trade_state(state)
+        deployments = get_today_deployments()
+        users = group_users_by_broker(deployments)
+
+        run_async(
+            emit_signal(
+                build_payload(
+                    leg,
+                    "SELL",
+                    str(CE_ID) if leg == "CE" else str(PE_ID),
+                    "SL EXIT",
+                    "EXIT",
+                    str(telemetry.get(f'{leg.lower()}_ltp')),
+                    state["pnl"],
+                    str(telemetry["pnl"]),
+                    state["lot"],
+                    users,
+                    strike = ce_strike if leg == "CE" else pe_strike
+                    )
+                )
+            )
+
+        log_trade_event(                
+            event_type="EXIT",
+            leg_name=leg,
+            token=token,
+            symbol=SYMBOL,
+            side="SELL",
+            lot=1,
+            price=telemetry.get('ce_ltp') if leg == "CE" else telemetry.get('pe_ltp'), 
+            reason="FORCE EXIT MTM",
+            pnl= ce_state["pnl"],
+            cum_pnl=str(telemetry["pnl"])
+            )
+
+        
+
+        return "SL"
+
+    return None
+
+def check_retest_entry(state, ltp , leg = "CE"):
+
+
+    token = CE_ID if leg == "CE" else PE_ID
+
+
+    if state["position"]:
+        state["last_ltp"] = ltp
+        return False
+
+    if not state["waiting_retest"]:
+        state["last_ltp"] = ltp
+        return False
+
+    previous = state["last_ltp"]
+
+    if previous is None:
+        state["last_ltp"] = ltp
+        return False
+
+    ema = state["ema9"]
+
+    crossed_up = previous < ema <= ltp
+    crossed_down = previous > ema >= ltp
+
+    if crossed_up or crossed_down:
+
+        state["position"] = True
+        state["waiting_retest"] = False
+
+        state["entry_price"] = ltp
+
+        state["target"] = get_next_fibonacci_target(
+            state,
+            ltp
+        )
+
+        print("\n========== ENTRY ==========")
+        print(f"Price  : {ltp:.2f}")
+        print(f"EMA    : {ema:.2f}")
+        print(f"Target : {state['target']:.2f}")
+        print("===========================\n")
+
+        state["last_ltp"] = ltp
+
+        
+        deployments = get_today_deployments()
+        users = group_users_by_broker(deployments)
+
+
+        run_async(
+            emit_signal(
+                build_payload(
+                    leg,
+                    "BUY",
+                    str(CE_ID) if leg == "CE" else str(PE_ID),
+                    " ENTRY BREAKOUT",
+                    "ENTRY",
+                    str(telemetry.get(f'{leg.lower()}_ltp')),
+                    state["pnl"],
+                    str(telemetry["pnl"]),
+                    state["lot"],
+                    users,
+                    strike = ce_strike if leg == "CE" else pe_strike
+                    )
+                )
+            )
+
+        log_trade_event(                
+            event_type="ENTRY",
+            leg_name=leg,
+            token=token,
+            symbol=SYMBOL,
+            side="BUY",
+            lot=1,
+            price=telemetry.get('ce_ltp') if leg == "CE" else telemetry.get('pe_ltp'), 
+            reason="FORCE EXIT MTM",
+            pnl= ce_state["pnl"],
+            cum_pnl=str(telemetry["pnl"])
+            )
+
+        state["entry_price"] = ltp
+
+
+
+        return True
+
+    state["last_ltp"] = ltp
+
+    return False
+
+def on_message(msg):
+
+    if msg.get("type") != "Quote Data":
+        return
+
+    token = str(msg["security_id"])
+    ltp = float(msg.get("LTP", 0))
+
+    builder = builders.get(token)
+
+    if not builder:
+        return
+
+    candle = builder.process_tick(msg)
+
+        # =========================
+    # TELEMETRY (REAL-TIME PnL)
+    # =========================
+    ce_running = 0
+    pe_running = 0
+
+    if ce_state["position"]:
+        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE
+
+    if pe_state["position"]:
+        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE
+
+    telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
+    telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
+    telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
+
+
+
+    # ==========================================================
+    # CE
+    # ==========================================================
+
+    if token == CE_ID:
+
+        telemetry["ce_ltp"] = ltp
+
+        # Every Tick
+        check_exit(ce_state, ltp , leg = "CE")
+        check_retest_entry(ce_state, ltp, leg = "CE")
+
+        # Every completed 5-minute candle
+        if candle:
+
+            print("\n========== CE 5 MIN CANDLE ==========")
+            print(candle)
+            print("=====================================\n")
+
+            ce_state["candles"] = load_history(
+                ce_security_id,
+                candle_count=10
+            )
+
+            ce_state["ema9"] = calculate_ema(
+                [c["close"] for c in ce_state["candles"]],
+                period=9
+            )
+
+            check_breakout(
+                ce_state,
+                candle,
+                leg = "CE"
+            )
+ 
+    # ==========================================================
+    # PE
+    # ==========================================================
+
+    elif token == PE_ID:
+
+        telemetry["pe_ltp"] = ltp
+
+        # Every Tick
+        check_exit(pe_state, ltp , leg = "PE")
+        check_retest_entry(pe_state, ltp, leg = "PE")
+
+        # Every completed 5-minute candle
+        if candle:
+
+            print("\n========== PE 5 MIN CANDLE ==========")
+            print(candle)
+            print("=====================================\n")
+
+            pe_state["candles"] = load_history(
+                pe_security_id,
+                candle_count=10
+            )
+
+            pe_state["ema9"] = calculate_ema(
+                [c["close"] for c in pe_state["candles"]],
+                period=9
+            )
+
+            check_breakout(
+                pe_state,
+                candle,
+                leg = "PE"
+            )
+
+
+
 # =========================
 # START
 # =========================
@@ -1035,8 +1166,17 @@ print("CE Security ID :", ce_security_id)
 print("PE Strike      :", pe_strike)
 print("PE Security ID :", pe_security_id)
 
+CE_ID = str(ce_security_id)
+PE_ID = str(pe_security_id)
+
 ce_state = init_state()
 pe_state = init_state()
+
+builders = {
+    ce_security_id: FiveMinuteCandleBuilder(),
+    pe_security_id: FiveMinuteCandleBuilder()
+}
+
 
 # Log CE leg
 logtradeleg(
@@ -1092,7 +1232,7 @@ print("\nPE Historical Candles\n")
 
 for candle in pe_state["candles"]:
     print(candle)
- 
+
 ce_state["ema9"] = calculate_ema(
     [c["close"] for c in ce_state["candles"]],
     period=9
@@ -1133,4 +1273,27 @@ print(
     f"{pe_state['ema9']:.2f}"
 )
 
- 
+
+instruments = [
+    (MarketFeed.NSE_FNO, str(ce_security_id), MarketFeed.Quote),
+    (MarketFeed.NSE_FNO, str(pe_security_id), MarketFeed.Quote)
+]
+
+feed = MarketFeed(dhan_context, instruments, "v2")
+
+TOKENS = [
+  str(ce_security_id) , str(pe_security_id)
+]
+
+while True:
+    try:
+
+        feed.run_forever()
+        msg = feed.get_data()
+
+        if msg:
+            on_message(msg)
+
+    except Exception as e:
+        print("WS ERROR:", e)
+        feed.run_forever()

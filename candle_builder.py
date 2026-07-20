@@ -59,3 +59,93 @@ class OneMinuteCandleBuilder:
             "volume": volume
         }
  
+
+
+class FiveMinuteCandleBuilder:
+
+    def __init__(self):
+
+        self.current_candle = None
+        self.current_bucket = None
+
+    def process_candle(self, candle):
+        """
+        Accepts COMPLETED 1-minute candle.
+
+        Returns:
+            None -> if 5-minute candle still building
+
+            completed 5-minute candle -> every 5 minutes
+        """
+
+        candle_time = datetime.fromisoformat(
+            candle["timestamp"]
+        )
+
+        bucket = candle_time.replace(
+            minute=(candle_time.minute // 5) * 5,
+            second=0,
+            microsecond=0
+        )
+
+        # First candle
+        if self.current_bucket is None:
+
+            self._start_new_candle(
+                bucket,
+                candle
+            )
+
+            return None
+
+        # New 5-minute bucket
+        if bucket != self.current_bucket:
+
+            finished = self.current_candle
+
+            self._start_new_candle(
+                bucket,
+                candle
+            )
+
+            return finished
+
+        # Update existing 5-minute candle
+
+        self.current_candle["high"] = max(
+            self.current_candle["high"],
+            candle["high"]
+        )
+
+        self.current_candle["low"] = min(
+            self.current_candle["low"],
+            candle["low"]
+        )
+
+        self.current_candle["close"] = candle["close"]
+
+        self.current_candle["volume"] += candle["volume"]
+
+        return None
+
+    def _start_new_candle(self, bucket, candle):
+
+        self.current_bucket = bucket
+
+        self.current_candle = {
+
+            "timestamp": bucket.isoformat(),
+
+            "datetime": bucket,
+
+            "open": candle["open"],
+
+            "high": candle["high"],
+
+            "low": candle["low"],
+
+            "close": candle["close"],
+
+            "volume": candle["volume"]
+
+        }
