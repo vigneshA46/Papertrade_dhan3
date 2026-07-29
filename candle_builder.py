@@ -60,92 +60,86 @@ class OneMinuteCandleBuilder:
         }
  
 
-
 class FiveMinuteCandleBuilder:
 
     def __init__(self):
-
         self.current_candle = None
         self.current_bucket = None
 
-    def process_candle(self, candle):
+    def process_tick(self, tick):
         """
-        Accepts COMPLETED 1-minute candle.
+        tick must contain:
+        LTP
+        volume
+        LTT
 
         Returns:
-            None -> if 5-minute candle still building
-
+            None -> while building candle
             completed 5-minute candle -> every 5 minutes
         """
 
-        candle_time = datetime.fromisoformat(
-            candle["timestamp"]
-        )
+        if tick.get("type") != "Quote Data":
+            return None
 
-        bucket = candle_time.replace(
-            minute=(candle_time.minute // 5) * 5,
+        ltp = float(tick["LTP"])
+        volume = int(tick["volume"])
+        ltt = tick["LTT"]
+
+        today = datetime.now(IST).date()
+
+        tick_time = datetime.strptime(
+            f"{today} {ltt}",
+            "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=IST)
+
+        # 5-minute bucket
+        bucket = tick_time.replace(
+            minute=(tick_time.minute // 5) * 5,
             second=0,
             microsecond=0
         )
 
-        # First candle
+        # First tick
         if self.current_bucket is None:
-
-            self._start_new_candle(
-                bucket,
-                candle
-            )
-
+            self._start_new_candle(bucket, ltp, volume)
             return None
 
-        # New 5-minute bucket
+        # New 5-minute candle started
         if bucket != self.current_bucket:
 
-            finished = self.current_candle
+            finished_candle = self.current_candle
 
-            self._start_new_candle(
-                bucket,
-                candle
-            )
+            self._start_new_candle(bucket, ltp, volume)
 
-            return finished
+            return finished_candle
 
-        # Update existing 5-minute candle
-
+        # Update existing candle
         self.current_candle["high"] = max(
             self.current_candle["high"],
-            candle["high"]
+            ltp
         )
 
         self.current_candle["low"] = min(
             self.current_candle["low"],
-            candle["low"]
+            ltp
         )
 
-        self.current_candle["close"] = candle["close"]
+        self.current_candle["close"] = ltp
 
-        self.current_candle["volume"] += candle["volume"]
+        # Dhan gives cumulative volume
+        self.current_candle["volume"] = volume
 
         return None
 
-    def _start_new_candle(self, bucket, candle):
+    def _start_new_candle(self, bucket, ltp, volume):
 
         self.current_bucket = bucket
 
         self.current_candle = {
-
             "timestamp": bucket.isoformat(),
-
-            "datetime": bucket,
-
-            "open": candle["open"],
-
-            "high": candle["high"],
-
-            "low": candle["low"],
-
-            "close": candle["close"],
-
-            "volume": candle["volume"]
-
+            "open": ltp,
+            "high": ltp,
+            "low": ltp,
+            "close": ltp,
+            "volume": volume
         }

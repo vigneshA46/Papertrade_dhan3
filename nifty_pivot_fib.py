@@ -63,7 +63,7 @@ PE_TARGET_POINTS = 50
 
 IST = pytz.timezone("Asia/Kolkata")
 
-TRADE_START = dtime(0, 20)
+TRADE_START = dtime(9, 20)
 TRADE_END   = dtime(15, 20)
 
 TARGET_POINTS = 50
@@ -1041,12 +1041,14 @@ def on_message(msg):
     if msg.get("type") != "Quote Data":
         return
 
+
     token = str(msg["security_id"])
     ltp = float(msg.get("LTP", 0))
 
     builder = builders.get(token)
 
     if not builder:
+        print(f"Unknown token: {token}")
         return
 
     candle = builder.process_tick(msg)
@@ -1073,8 +1075,7 @@ def on_message(msg):
     # CE
     # ==========================================================
 
-    if token == CE_ID:
-
+    if str(token) == str(ce_security_id):
         telemetry["ce_ltp"] = ltp
 
         # Every Tick
@@ -1173,8 +1174,8 @@ ce_state = init_state()
 pe_state = init_state()
 
 builders = {
-    ce_security_id: FiveMinuteCandleBuilder(),
-    pe_security_id: FiveMinuteCandleBuilder()
+    CE_ID: FiveMinuteCandleBuilder(),
+    PE_ID: FiveMinuteCandleBuilder()
 }
 
 
@@ -1292,6 +1293,7 @@ while True:
         msg = feed.get_data()
 
         if msg:
+            
             on_message(msg)
 
     except Exception as e:

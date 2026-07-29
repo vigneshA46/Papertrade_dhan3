@@ -15,7 +15,9 @@ from dispatcher import subscribe
 from queue import Queue
 import asyncio
 from find_instrument import FindInstrument
-from option_chain_cache import set_option_chain, get_option_chain
+import option_chain_manager
+
+
 
 
 # =========================
@@ -455,12 +457,7 @@ else:
 
 atm = ATM
 
-oc = dhan.option_chain(
-    under_security_id=13,
-    under_exchange_segment="IDX_I",
-    expiry=str(next_expiry)  
-)
-
+oc = option_chain_manager.get_option_chain()
 
 option_data = oc["data"]["data"]["oc"]
 
@@ -855,6 +852,8 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
 def on_message(msg):
 
+    global ce_state, pe_state, telemetry, combined_pnl
+
     if msg.get("type") != "Quote Data":
         return
     
@@ -917,6 +916,7 @@ def on_message(msg):
     telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
     telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
     telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
+
 
 
 
