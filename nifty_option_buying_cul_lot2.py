@@ -381,7 +381,7 @@ def init_state():
         "trading_disabled": False,
         "entry_price": None,
         "entry_time": None,
-        "lot": 1,
+        "lot": 2,
         "pnl": 0.0,
         "symbol": None,
         "rearm_required": False,
@@ -803,7 +803,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
             ce_state["position"] = False
             ce_state["rearm_required"] = True
-            ce_state["lot"] = 1
+            ce_state["lot"] = 2
             CE_TARGET_POINTS = CE_TARGET_POINTS + 50
 
     if pe_total >= PE_TARGET_POINTS*65:
@@ -841,7 +841,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
             pe_state["position"] = False
             pe_state["rearm_required"] = True
-            pe_state["lot"] = 1
+            pe_state["lot"] = 2
             PE_TARGET_POINTS = PE_TARGET_POINTS + 50
 
 
@@ -957,7 +957,7 @@ def on_message(msg):
                 token=CE_ID,
                 symbol=SYMBOL,
                 side="SELL",
-                lot=1,
+                lot=ce_state["lot"],
                 price=telemetry.get('ce_ltp'),
                 reason="FORCE EXIT MTM",
                 pnl= ce_state["pnl"],
@@ -1001,7 +1001,7 @@ def on_message(msg):
                 token=PE_ID,
                 symbol=SYMBOL,
                 side="SELL",
-                lot=1,
+                lot=pe_state["lot"],
                 price=telemetry.get('pe_ltp'),
                 reason="FORCE EXIT MTM",
                 pnl= pe_state["pnl"],
