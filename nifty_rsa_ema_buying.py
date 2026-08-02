@@ -816,11 +816,9 @@ def get_previous_day_ohlc(security_id):
 
 def detect_ema_bullish_crossover(state):
     """
-    Detects a bullish EMA crossover.
+    Detects bullish EMA crossover.
 
-    Returns:
-        True  -> EMA9 crossed above EMA21
-        False -> No crossover
+    EMA9 crosses from below EMA21 to above EMA21.
     """
 
     if (
@@ -829,12 +827,15 @@ def detect_ema_bullish_crossover(state):
     ):
         return False
 
-    return (
+    crossover = (
         state["previous_ema9"] <= state["previous_ema21"]
         and
         state["ema9"] > state["ema21"]
     )
 
+    state["crossover_happened"] = crossover
+
+    return crossover
 
 def init_state():
     return {
@@ -880,10 +881,102 @@ def init_state():
 
         "previous_ema9": None,
         "previous_ema21": None,
+
+        "crossover_happened" : False
     }
 
 
+def handle_leg(state, candle):
+
+    # Check EMA crossover
+    if not state["crossover_happened"]:
+        return
+
+    # Check RSI confirmation
+    if state["rsi14"] <= 50:
+        return
+
+    # Save signal candle
+    state["signal_candle"] = {
+        "high": candle["high"],
+        "low": candle["low"],
+        "close": candle["close"],
+        "time": candle["time"]
+    }
+
+    # Wait for breakout
+    state["waiting_for_breakout"] = True
+
+    print("✅ Signal Candle Created")
+
+
+def manage_positions(state, ltp):
+    """
+    Handles:
+    1. Entry
+    2. Target Exit
+    3. Stop Loss Exit
+    """
+
+    # ==========================
+    # ENTRY
+    # ==========================
+    if (
+        not state["position"]
+        and state["crossover_happened"]
+        and state["rsi14"] > 50
+        and state["waiting_for_breakout"]
+        and ltp >= state["signal_candle"]["high"] + 2
+    ):
+
+        state["position"] = True
+        state["entry_price"] = ltp
+
+        # Reset signal
+        state["waiting_for_breakout"] = False
+        state["crossover_happened"] = False
+        state["signal_candle"] = None
+
+        print(f"BUY @ {ltp}")
+
+        return
+
+
+    # ==========================
+    # TARGET EXIT
+    # ==========================
+    if (
+        state["position"]
+        and ltp >= state["entry_price"] + 20
+    ):
+
+        print(f"TARGET HIT @ {ltp}")
+
+        state["position"] = False
+        state["entry_price"] = None
+
+        return
+
+
+    # ==========================
+    # STOP LOSS EXIT
+    # ==========================
+    if (
+        state["position"]
+        and ltp <= state["entry_price"] - 20
+    ):
+
+        print(f"STOP LOSS HIT @ {ltp}")
+
+        state["position"] = False
+        state["entry_price"] = None
+
+        return
+
+
 def on_message(msg):
+
+    global telemetry, ce_state, pe_state
 
     if msg.get("type") != "Quote Data":
         return
@@ -898,7 +991,7 @@ def on_message(msg):
 
     candle = builder.process_tick(msg)
 
-        # =========================
+    # =========================
     # TELEMETRY (REAL-TIME PnL)
     # =========================
     ce_running = 0
@@ -915,14 +1008,15 @@ def on_message(msg):
     telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
 
 
-
     # ==========================================================
     # CE
     # ==========================================================
 
     if token == CE_ID:
 
+
         telemetry["ce_ltp"] = ltp
+        manage_positions(ce_state, ce_ltp)
 
         # Every completed 5-minute candle
         if candle:
@@ -930,6 +1024,9 @@ def on_message(msg):
             print("\n========== CE 5 MIN CANDLE ==========")
             print(candle)
             print("=====================================\n")
+
+            ce_state["previous_ema9"] = ce_state["ema9"]
+            ce_state["previous_ema21"] = ce_state["ema21"]
 
             ce_state["candles"] = load_history(
                 ce_security_id,
@@ -949,6 +1046,10 @@ def on_message(msg):
             update_rsi(ce_state, candle)
             print("CE RSI :", ce_state["rsi14"])
 
+            detect_ema_bullish_crossover(ce_state)
+
+            handle_leg(ce_state, candle)
+
     # ==========================================================
     # PE
     # ==========================================================
@@ -956,6 +1057,7 @@ def on_message(msg):
     elif token == PE_ID:
 
         telemetry["pe_ltp"] = ltp
+        manage_positions(pe_state, pe_ltp)
 
         # Every completed 5-minute candle
         if candle:
@@ -963,6 +1065,9 @@ def on_message(msg):
             print("\n========== PE 5 MIN CANDLE ==========")
             print(candle)
             print("=====================================\n")
+
+            pe_state["previous_ema9"] = pe_state["ema9"]
+            pe_state["previous_ema21"] = pe_state["ema21"]
 
             pe_state["candles"] = load_history(
                 pe_security_id,
@@ -981,6 +1086,10 @@ def on_message(msg):
 
             update_rsi(pe_state, candle)
             print("PE RSI :", pe_state["rsi14"])
+
+            detect_ema_bullish_crossover(pe_state)
+
+            handle_leg(pe_state, candle)
 
 
 threading.Thread(target=trade_log_worker, daemon=True).start()
@@ -1018,7 +1127,6 @@ builders = {
     ce_security_id: FiveMinuteCandleBuilder(),
     pe_security_id: FiveMinuteCandleBuilder()
 }
-
 
 
 finder=FindInstrument()
