@@ -57,6 +57,25 @@ NIFTY PIVOT FIBONACCI
 This is a NIFTY intraday option buying strategy that operates on the 5-minute timeframe. At 09:20 AM, the live NIFTY option chain is fetched, and one Call (CE) and one Put (PE) strike with an LTP less than or equal to ₹90 are selected and fixed for the entire trading session. The selected CE and PE charts are analyzed independently using the 9-period Exponential Moving Average (EMA 9) and Fibonacci Pivot levels. A buy entry is triggered when a 5-minute candle closes above EMA 9 and the following candle retraces to retest the EMA, at which point the trade is executed immediately at the live tick. The profit target for each trade is the next Fibonacci Pivot resistance level (such as Pivot, R1, R2, or R3, depending on the entry price), while the stop loss is dynamically maintained at 5 points below the current EMA 9. After a trade exits, re-entry is allowed whenever a fresh valid setup is formed on the same chart. A combined daily profit target of ₹2,500 is maintained across both CE and PE positions, and once this target is achieved, all open positions are closed and no further trades are taken for the remainder of the trading day.
 
 
+Nifty Intraday EMA-RSI Option Buying Strategy
+
+This is an intraday option-buying strategy for Nifty that operates exclusively on 5-minute candles. At 09:15 AM, the strategy fetches the current option chain and identifies one Call Option (CE) and one Put Option (PE) whose Last Traded Price (LTP) is above ₹200. These two option contracts remain fixed for the entire trading session, and each leg is monitored and traded independently using its own 5-minute OHLC candles.
+
+For each option leg, the strategy continuously calculates a 9-period Exponential Moving Average (EMA), 21-period Exponential Moving Average (EMA), and 14-period Relative Strength Index (RSI). A valid buy setup is created when the 9 EMA crosses above the 21 EMA (bullish crossover) and the RSI is greater than 50, confirming bullish momentum. Once both conditions are satisfied, the candle where they occur becomes the signal candle.
+
+After a signal candle is identified, the strategy does not enter immediately. Instead, it waits for live price confirmation. A trade is executed only when the option's LTP ticks at or above the signal candle's High + 2 points. At that moment, one lot of the corresponding option is purchased.
+
+Each trade is managed with fixed risk parameters:
+
+Target: +20 points from the entry price.
+Stop Loss: -20 points from the entry price.
+
+Whichever level is reached first results in an immediate exit.
+
+The strategy allows a maximum of two trades per trading day (subject to whether this limit is shared across both CE and PE or maintained separately for each leg). After the daily trade limit is reached, no further entries are taken for the remainder of the session. This restriction helps prevent overtrading while maintaining disciplined risk management.
+
+Overall, the strategy combines trend identification (EMA crossover), momentum confirmation (RSI > 50), and breakout confirmation (High + 2 trigger) before entering a trade, while using predefined profit targets, stop losses, and daily trade limits to maintain consistent execution.
+
 
 google sheet logging
 

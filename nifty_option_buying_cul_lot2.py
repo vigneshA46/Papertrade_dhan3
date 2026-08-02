@@ -640,6 +640,8 @@ def handle_leg(name, token, candle, state, ltp):
     # =============================
     # ENTRY SIGNAL AND EXECUTION
     # =============================
+
+
     if not state["position"] and not state["rearm_required"]:
 
         if close > state["marked"] and avg > state["marked"] and avg < close:
@@ -775,10 +777,6 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
         print("FORMATTED USERS:", users)
 
-
-        
-        
-
         # FORCE EXIT CE
         if ce_state["position"]:
             exit_price = ce_ltp
@@ -854,6 +852,8 @@ def on_message(msg):
 
     global ce_state, pe_state, telemetry, combined_pnl
 
+    state = ce_state if str(msg["security_id"]) == CE_ID else pe_state
+
     if msg.get("type") != "Quote Data":
         return
     
@@ -873,6 +873,7 @@ def on_message(msg):
     if token == CE_ID:
         tick_exit_check("CE", token, ce_state, ltp)
         telemetry["ce_ltp"] = float(ltp or 0)
+
 
     if token == PE_ID:
         tick_exit_check("PE", token, pe_state, ltp)
@@ -917,10 +918,48 @@ def on_message(msg):
     telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
     telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
 
+        
+    if not state["position"] and not state["rearm_required"]:
+
+        if ltp >= state["marked"] + 15:
+
+            entry_price = ltp   
+
+            state["entry_price"] = entry_price
+            state["entry_time"] = datetime.now(IST).isoformat()
+
+            state["position"] = True
+
+            deployments = get_today_deployments()
+
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+
+            print("🟢 BUY", name, entry_price)
+            run_async(emit_signal(build_payload(name, "BUY", token , "entry","ENTRY", ltp, state["pnl"], combined_pnl,state["lot"],users,state["strike"])))
+
+            log_trade_event(
+                event_type="ENTRY",
+                leg_name=name,
+                token=token,
+                symbol="NIFTY",
+                side="BUY",
+                lot=state["lot"],
+                price=entry_price,
+                reason="Trade opened",
+                pnl= state["pnl"],
+                cum_pnl=combined_pnl
+                )
+
+            log_event(f"{name} BUY", token, "ENTRY_EXECUTED", entry_price, "Trade opened")
 
 
 
-    if telemetry["pnl"] >= 9500 or telemetry["pnl"] <= -9500:
+
+
+    if telemetry["pnl"] >= 9500 or telemetry["pnl"] <= -13000:
 
         print("🚨 MTM LIMIT HIT — FORCE EXIT ALL")
 
