@@ -42,7 +42,7 @@ ALL_TOKENS = set()
 if 'strategy1' in globals():
     ALL_TOKENS.update(strategy1.TOKENS)
 
-
+ 
 access_token = get_access_token()
 client_id = os.getenv("CLIENT_ID")
 dhan_context = DhanContext(client_id, access_token)

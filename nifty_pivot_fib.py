@@ -1190,8 +1190,8 @@ today_date = datetime.now().date()
 
 
 
-ce_row = find_option_security(fno_df, ATM, "CE", today_date, "NIFTY")
-pe_row = find_option_security(fno_df, ATM, "PE", today_date, "NIFTY")
+#ce_row = find_option_security(fno_df, str(ce_strike), "CE", today_date, "NIFTY")
+#pe_row = find_option_security(fno_df, str(pe_strike), "PE", today_date, "NIFTY")
 
 
 
