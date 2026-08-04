@@ -58,6 +58,9 @@ TARGET_POINTS = 50
 PE_TARGET_POINTS = 50
 LOTSIZE = 65
 
+TRAIL_STEP = 2
+TRAIL_DISTANCE = 2
+
 today = datetime.now(IST).strftime("%Y-%m-%d")
 
 
@@ -386,7 +389,12 @@ def init_state():
         "symbol": None,
         "rearm_required": False,
         "moment":0.0,
-        "strike":None
+        "strike":None,
+
+        # NEW
+        "trail_active": False,
+        "trail_sl": None,
+        "next_trail": None,
 
     }
 
@@ -653,6 +661,10 @@ def handle_leg(name, token, candle, state, ltp):
 
             state["position"] = True
 
+            state["trail_active"] = False
+            state["trail_sl"] = None
+            state["next_trail"] = None
+
             deployments = get_today_deployments()
 
             users = group_users_by_broker(deployments)
@@ -767,80 +779,184 @@ def universal_exit_check(ce_ltp, pe_ltp):
     # ✅ COMBINED EXIT (TICK LEVEL SAFE)
     # =========================
 
+    if ce_state["position"]:
 
-    if ce_total >= CE_TARGET_POINTS*65:
+        profit_points = ce_ltp - ce_state["entry_price"]
 
-        print("🏁 TARGET HIT", total)
-        deployments = get_today_deployments()
+        # -----------------------------------
+        # Activate trailing
+        # -----------------------------------
+        if (
+            not ce_state["trail_active"]
+            and profit_points >= CE_TARGET_POINTS
+        ):
 
-        users = group_users_by_broker(deployments)
+            ce_state["trail_active"] = True
+            ce_state["trail_sl"] = ce_ltp - TRAIL_DISTANCE
+            ce_state["next_trail"] = ce_ltp + TRAIL_STEP
 
-        print("FORMATTED USERS:", users)
+            print(
+                f"✅ CE Trailing Started | SL={ce_state['trail_sl']} | Next={ce_state['next_trail']}"
+            )
 
-        # FORCE EXIT CE
-        if ce_state["position"]:
-            exit_price = ce_ltp
-            pnl = (exit_price - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
 
-            ce_state["pnl"] += pnl
-            combined_pnl += pnl
-            
-            run_async(emit_signal(build_payload("CE", "SELL", CE_ID , "exit","EXIT", ce_ltp, ce_state["pnl"], combined_pnl,ce_state["lot"],users,ce_state["strike"])))
-            log_trade_event(
-                event_type="EXIT",
-                leg_name="CE",
-                token=CE_ID,
-                symbol=SYMBOL,
-                side="SELL",
-                lot=ce_state["lot"],
-                price=exit_price,
-                reason="UNIVERSAL EXIT",
-                pnl= ce_state["pnl"],
-                cum_pnl=combined_pnl
-                )   
+        # -----------------------------------
+        # Move trail
+        # -----------------------------------
+        if ce_state["trail_active"]:
 
-            ce_state["position"] = False
-            ce_state["rearm_required"] = True
-            ce_state["lot"] = 2
-            CE_TARGET_POINTS = CE_TARGET_POINTS + 50
+            while ce_ltp >= ce_state["next_trail"]:
 
-    if pe_total >= PE_TARGET_POINTS*65:
+                ce_state["trail_sl"] += TRAIL_STEP
+                ce_state["next_trail"] += TRAIL_STEP
 
-        print("🏁 TARGET HIT", total)
-        deployments = get_today_deployments()
-
-        users = group_users_by_broker(deployments)
-
-        print("FORMATTED USERS:", users)
-
-        
-        # FORCE EXIT PE
-        if pe_state["position"]:
-            exit_price = pe_ltp
-            pnl = (exit_price - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
-
-            pe_state["pnl"] += pnl
-            combined_pnl += pnl
-
-            run_async(emit_signal(build_payload("PE", "SELL", PE_ID , "exit","EXIT", pe_ltp, pe_state["pnl"], combined_pnl,pe_state["lot"],users,pe_state["strike"])))
-
-            log_trade_event(
-                event_type="EXIT",
-                leg_name="PE",
-                token=PE_ID,
-                symbol=SYMBOL,
-                side="SELL",
-                lot=pe_state["lot"],
-                price=exit_price,
-                reason="UNIVERSAL EXIT",
-                pnl= pe_state["pnl"],
-                cum_pnl=combined_pnl
+                print(
+                    f"📈 CE Trail Updated | SL={ce_state['trail_sl']} | Next={ce_state['next_trail']}"
                 )
 
-            pe_state["position"] = False
-            pe_state["rearm_required"] = True
-            pe_state["lot"] = 2
-            PE_TARGET_POINTS = PE_TARGET_POINTS + 50
+            # -----------------------------------
+            # SL HIT
+            # -----------------------------------
+
+            if ce_ltp <= ce_state["trail_sl"]:
+
+                print("🔴 CE Trailing Exit")
+                #if ce_total >= CE_TARGET_POINTS*65:
+
+                print("🏁 TARGET HIT", total)
+                deployments = get_today_deployments()
+
+                users = group_users_by_broker(deployments)
+
+                print("FORMATTED USERS:", users)
+
+                # FORCE EXIT CE
+                if ce_state["position"]:
+                    exit_price = ce_ltp
+                    pnl = (exit_price - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
+
+                    ce_state["pnl"] += pnl
+                    combined_pnl += pnl
+            
+                    run_async(emit_signal(build_payload("CE", "SELL", CE_ID , "exit","EXIT", ce_ltp, ce_state["pnl"], combined_pnl,ce_state["lot"],users,ce_state["strike"])))
+                    log_trade_event(
+                        event_type="EXIT",
+                        leg_name="CE",
+                        token=CE_ID,
+                        symbol=SYMBOL,
+                        side="SELL",
+                        lot=ce_state["lot"],
+                        price=exit_price,
+                        reason="UNIVERSAL EXIT",
+                        pnl= ce_state["pnl"],
+                        cum_pnl=combined_pnl
+                        )   
+
+                    ce_state["position"] = False
+                    ce_state["rearm_required"] = True
+                    ce_state["lot"] = 2
+                    #CE_TARGET_POINTS = CE_TARGET_POINTS + 50
+
+                    ce_state["trail_active"] = False
+                    ce_state["trail_sl"] = None
+                    ce_state["next_trail"] = None
+
+
+                # << paste your existing CE exit block here >>
+
+    if pe_state["position"]:
+
+        profit_points = pe_ltp - pe_state["entry_price"]
+
+        # -----------------------------------
+        # Activate trailing
+        # -----------------------------------
+        if (
+            not pe_state["trail_active"]
+            and profit_points >= PE_TARGET_POINTS
+        ):  
+
+            pe_state["trail_active"] = True
+            pe_state["trail_sl"] = pe_ltp - TRAIL_DISTANCE
+            pe_state["next_trail"] = pe_ltp + TRAIL_STEP
+
+            print(
+                f"✅ PE Trailing Started | SL={pe_state['trail_sl']} | Next={pe_state['next_trail']}"
+            )
+
+        # -----------------------------------
+        # Move trail
+        # -----------------------------------
+        if pe_state["trail_active"]:
+
+            while pe_ltp >= pe_state["next_trail"]:
+
+                pe_state["trail_sl"] += TRAIL_STEP
+                pe_state["next_trail"] += TRAIL_STEP
+
+                print(
+                    f"📈 PE Trail Updated | SL={pe_state['trail_sl']} | Next={pe_state['next_trail']}"
+                )
+
+            # -----------------------------------
+            # SL HIT
+            # -----------------------------------
+
+            if pe_ltp <= pe_state["trail_sl"]:
+
+                print("🔴 PE TRAILING SL HIT", total)
+
+                deployments = get_today_deployments()
+                users = group_users_by_broker(deployments)
+
+                print("FORMATTED USERS:", users)
+
+                if pe_state["position"]:
+
+                    exit_price = pe_ltp
+                    pnl = (exit_price - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+
+                    pe_state["pnl"] += pnl
+                    combined_pnl += pnl
+
+                    run_async(
+                        emit_signal(
+                            build_payload(
+                                "PE",
+                                "SELL",
+                                PE_ID,
+                                "exit",
+                                "EXIT",
+                                pe_ltp,
+                                pe_state["pnl"],
+                                combined_pnl,
+                                pe_state["lot"],
+                                users,
+                                pe_state["strike"],
+                            )
+                        )
+                    )
+
+                    log_trade_event(
+                        event_type="EXIT",
+                        leg_name="PE",
+                        token=PE_ID,
+                        symbol=SYMBOL,
+                        side="SELL",
+                        lot=pe_state["lot"],
+                        price=exit_price,
+                        reason="TRAILING EXIT",
+                        pnl=pe_state["pnl"],
+                        cum_pnl=combined_pnl,
+                    )
+
+                    pe_state["position"] = False
+                    pe_state["rearm_required"] = True
+                    pe_state["lot"] = 2
+
+                    pe_state["trail_active"] = False
+                    pe_state["trail_sl"] = None
+                    pe_state["next_trail"] = None
 
 
 # =========================
