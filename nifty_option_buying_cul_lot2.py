@@ -772,7 +772,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
     ce_total = ce_state["pnl"] + ce_running
     pe_total = pe_state["pnl"] + pe_running
 
-    combined_total = ce_total + pe_total
+    combined_pnl = ce_total + pe_total
 
 
     # =========================
@@ -823,7 +823,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 print("🔴 CE Trailing Exit")
                 #if ce_total >= CE_TARGET_POINTS*65:
 
-                print("🏁 TARGET HIT", total)
+                #print("🏁 TARGET HIT", total)
                 deployments = get_today_deployments()
 
                 users = group_users_by_broker(deployments)
