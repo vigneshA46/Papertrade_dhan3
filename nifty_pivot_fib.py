@@ -42,9 +42,9 @@ EVENT_LOG_URL = "https://algoapi.dreamintraders.in/api/paperlogger/paperlogger"
 
 COMMON_ID = "3ff84201-7e4d-4e8d-8308-8241b1bca093"
 SYMBOL = "NIFTY"
-OPTION_SELECTION_LTP = 90
+OPTION_SELECTION_LTP = 120
 
-MARKET_OPEN = dtime(9, 15)
+MARKET_OPEN = dtime(9, 20)
 MARKET_CLOSE = dtime(15, 14)
 
 CE_ID = None
@@ -190,11 +190,16 @@ def build_payload(name, side, token , reason,event_type,ltp,pnl,cum_pnl,lot,user
 
     expiry_date = get_next_expiry()
 
+    expiry_date = get_next_expiry()
+
+    if isinstance(expiry_date, str):
+        expiry_date = datetime.strptime(expiry_date,"%Y-%m-%d")
+
     day = expiry_date.strftime("%d")
     month = expiry_date.strftime("%b").upper()
     year = expiry_date.strftime("%y")
 
-    symbol = f"NIFTY{day}{month}{year}{ATM}{name}"
+    symbol = f"NIFTY{day}{month}{year}{strike}{name}"
     expiry = expiry_date.strftime("%Y-%m-%d")
 
     return {
@@ -464,7 +469,7 @@ def load_history(security_id, candle_count=10):
 
     start_time, end_time = get_market_history_window(
         candle_count=candle_count,
-        interval=1
+        interval=5
     )
 
     print("\n========== HISTORY WINDOW ==========")
@@ -478,7 +483,7 @@ def load_history(security_id, candle_count=10):
         instrument_type="OPTIDX",
         from_date=start_time.strftime("%Y-%m-%d %H:%M:%S"),
         to_date=end_time.strftime("%Y-%m-%d %H:%M:%S"),
-        interval=1
+        interval=5
     )
 
     raw = data.get("data", {})
@@ -663,7 +668,7 @@ def get_last_market_time():
     # After market closes
     return market_close
 
-def get_market_history_window(candle_count=10, interval=1):
+def get_market_history_window(candle_count=10, interval=5):
     """
     Returns the history window required
     to fetch the last completed market candles.
@@ -706,7 +711,7 @@ def get_previous_day_ohlc(security_id):
         instrument_type="OPTIDX",
         from_date=start.strftime("%Y-%m-%d %H:%M:%S"),
         to_date=end.strftime("%Y-%m-%d %H:%M:%S"),
-        interval=1
+        interval=5
     )
 
     if data.get("status") != "success":
@@ -832,6 +837,30 @@ def get_next_fibonacci_target(state, entry_price):
 
     return state["r3"]
 
+MIN_TARGET_DISTANCE = 15
+
+
+def is_target_distance_valid(state, entry_price):
+    """
+    Returns True if the next Fibonacci target is
+    at least MIN_TARGET_DISTANCE points away.
+    """
+
+    target = get_next_fibonacci_target(state, entry_price)
+
+    if target is None:
+        return False
+
+    distance = target - entry_price
+
+    print(
+        f"Entry={entry_price:.2f}  "
+        f"Target={target:.2f}  "
+        f"Distance={distance:.2f}"
+    )
+
+    return distance >= MIN_TARGET_DISTANCE
+
 def reset_trade_state(state):
     """
     Clears strategy state after exit.
@@ -882,7 +911,9 @@ def check_exit(state, ltp , leg = "CE"):
         reset_trade_state(state)
 
         deployments = get_today_deployments()
+        print("Deployments:", deployments)
         users = group_users_by_broker(deployments)
+        print("Users:", users)
 
         run_async(
             emit_signal(
@@ -965,7 +996,6 @@ def check_exit(state, ltp , leg = "CE"):
 
 def check_retest_entry(state, ltp , leg = "CE"):
 
-
     token = CE_ID if leg == "CE" else PE_ID
 
 
@@ -990,6 +1020,23 @@ def check_retest_entry(state, ltp , leg = "CE"):
 
     if crossed_up or crossed_down:
 
+        # -----------------------------
+        # Target Distance Filter
+        # -----------------------------
+        if not is_target_distance_valid(state, ltp):
+
+            print(
+                f"❌ {leg} Entry Skipped "
+                f"(Target distance < {MIN_TARGET_DISTANCE} points)"
+            )
+
+            state["waiting_retest"] = False
+            state["last_ltp"] = ltp
+            return False
+
+        # -----------------------------
+        # Valid Entry
+        # -----------------------------
         state["position"] = True
         state["waiting_retest"] = False
 
@@ -999,6 +1046,7 @@ def check_retest_entry(state, ltp , leg = "CE"):
             state,
             ltp
         )
+
 
         print("\n========== ENTRY ==========")
         print(f"Price  : {ltp:.2f}")
@@ -1011,7 +1059,6 @@ def check_retest_entry(state, ltp , leg = "CE"):
         
         deployments = get_today_deployments()
         users = group_users_by_broker(deployments)
-
 
         run_async(
             emit_signal(
@@ -1165,6 +1212,7 @@ def on_message(msg):
 # =========================
 
 wait_for_start()
+threading.Thread(target=trade_log_worker, daemon=True).start()
 
 next_expiry = get_next_expiry()
 
@@ -1331,3 +1379,4 @@ while True:
     except Exception as e:
         print("WS ERROR:", e)
         feed.run_forever()
+ 

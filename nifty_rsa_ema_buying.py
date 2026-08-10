@@ -69,7 +69,7 @@ PE_ID = None
 load_dotenv()
 
 STRATEGY_NAME = "NIFTY_OPTION_BUYING_50 no reentry"
-MARKET_OPEN = dtime(9, 15)
+MARKET_OPEN = dtime(8, 15)
 MARKET_CLOSE = dtime(15, 14)
 
 CE_TARGET_POINTS = 50
@@ -77,7 +77,7 @@ PE_TARGET_POINTS = 50
 
 IST = pytz.timezone("Asia/Kolkata")
 
-TRADE_START = dtime(9, 15)
+TRADE_START = dtime(8, 15)
 TRADE_END   = dtime(15, 14)
 
 TARGET_POINTS = 50
@@ -882,7 +882,11 @@ def init_state():
         "previous_ema9": None,
         "previous_ema21": None,
 
-        "crossover_happened" : False
+        "crossover_happened" : False,
+
+        "leg_name": None,
+        "token": None,
+        "strike": None,
     }
 
 
@@ -909,7 +913,6 @@ def handle_leg(state, candle):
 
     print("✅ Signal Candle Created")
 
-
 def manage_positions(state, ltp):
     """
     Handles:
@@ -929,15 +932,55 @@ def manage_positions(state, ltp):
         and ltp >= state["signal_candle"]["high"] + 2
     ):
 
+        entry_price = ltp
+
+        # Store entry details
         state["position"] = True
-        state["entry_price"] = ltp
+        state["entry_price"] = entry_price
 
         # Reset signal
         state["waiting_for_breakout"] = False
         state["crossover_happened"] = False
         state["signal_candle"] = None
 
-        print(f"BUY @ {ltp}")
+        print(f"{state['leg_name']} BUY @ {entry_price}")
+
+        # ==========================
+        # ENTRY TELEMETRY / SIGNAL
+        # ==========================
+        run_async(
+            emit_signal(
+                build_payload(
+                    state["leg_name"],
+                    "BUY",
+                    state["token"],
+                    "entry",
+                    "ENTRY",
+                    entry_price,
+                    state["pnl"],
+                    combined_pnl,
+                    state["lot"],
+                    users,
+                    state["strike"]
+                )
+            )
+        )
+
+        # ==========================
+        # ENTRY TRADE LOG
+        # ==========================
+        log_trade_event(
+            event_type="ENTRY",
+            leg_name=state["leg_name"],
+            token=state["token"],
+            symbol=SYMBOL,
+            side="BUY",
+            lot=state["lot"],
+            price=entry_price,
+            reason="EMA CROSSOVER + RSI > 50 + BREAKOUT",
+            pnl=state["pnl"],
+            cum_pnl=combined_pnl
+        )
 
         return
 
@@ -950,8 +993,62 @@ def manage_positions(state, ltp):
         and ltp >= state["entry_price"] + 20
     ):
 
-        print(f"TARGET HIT @ {ltp}")
+        exit_price = ltp
 
+        pnl = (
+            (exit_price - state["entry_price"])
+            * LOTSIZE
+            * state["lot"]
+        )
+
+        state["pnl"] += pnl
+
+        global combined_pnl
+        combined_pnl += pnl
+
+        print(
+            f"{state['leg_name']} TARGET HIT @ {exit_price} "
+            f"PNL: {pnl}"
+        )
+
+        # ==========================
+        # EXIT TELEMETRY / SIGNAL
+        # ==========================
+        run_async(
+            emit_signal(
+                build_payload(
+                    state["leg_name"],
+                    "SELL",
+                    state["token"],
+                    "exit",
+                    "EXIT",
+                    exit_price,
+                    state["pnl"],
+                    combined_pnl,
+                    state["lot"],
+                    users,
+                    state["strike"]
+                )
+            )
+        )
+
+        # ==========================
+        # EXIT TRADE LOG
+        # ==========================
+        log_trade_event(
+            event_type="EXIT",
+            leg_name=state["leg_name"],
+            token=state["token"],
+            symbol=SYMBOL,
+            side="SELL",
+            lot=state["lot"],
+            price=exit_price,
+            reason="TARGET HIT",
+            pnl=state["pnl"],
+            cum_pnl=combined_pnl
+        )
+
+        # Reset position
         state["position"] = False
         state["entry_price"] = None
 
@@ -966,14 +1063,67 @@ def manage_positions(state, ltp):
         and ltp <= state["entry_price"] - 20
     ):
 
-        print(f"STOP LOSS HIT @ {ltp}")
+        exit_price = ltp
 
+        pnl = (
+            (exit_price - state["entry_price"])
+            * LOTSIZE
+            * state["lot"]
+        )
+
+        state["pnl"] += pnl
+
+        combined_pnl += pnl
+
+        print(
+            f"{state['leg_name']} STOP LOSS HIT @ {exit_price} "
+            f"PNL: {pnl}"
+        )
+
+        # ==========================
+        # EXIT TELEMETRY / SIGNAL
+        # ==========================
+        run_async(
+            emit_signal(
+                build_payload(
+                    state["leg_name"],
+                    "SELL",
+                    state["token"],
+                    "exit",
+                    "EXIT",
+                    exit_price,
+                    state["pnl"],
+                    combined_pnl,
+                    state["lot"],
+                    users,
+                    state["strike"]
+                )
+            )
+        )
+
+        # ==========================
+        # EXIT TRADE LOG
+        # ==========================
+        log_trade_event(
+            event_type="EXIT",
+            leg_name=state["leg_name"],
+            token=state["token"],
+            symbol=SYMBOL,
+            side="SELL",
+            lot=state["lot"],
+            price=exit_price,
+            reason="STOP LOSS HIT",
+            pnl=state["pnl"],
+            cum_pnl=combined_pnl
+        )
+
+        # Reset position
         state["position"] = False
         state["entry_price"] = None
 
         return
 
-
+        
 def on_message(msg):
 
     global telemetry, ce_state, pe_state
@@ -1138,6 +1288,14 @@ AngelCE = finder.get_option("NIFTY" , int(ce_strike) , "CE")
 AngelPE = finder.get_option("NIFTY" , int(pe_strike) , "PE")
 
 #print("angel tokens" , AngelCE , AngelPE)
+
+ce_state["leg_name"] = "CE"
+ce_state["token"] = CE_ID
+ce_state["strike"] = ce_strike
+
+pe_state["leg_name"] = "PE"
+pe_state["token"] = PE_ID
+pe_state["strike"] = pe_strike
 
 
 
