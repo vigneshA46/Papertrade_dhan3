@@ -407,7 +407,7 @@ def init_state():
         "trading_disabled": False,
         "entry_price": None,
         "entry_time": None,
-        "lot": 1,
+        "lot": 2,
         "pnl": 0.0,
         "symbol": None,
         "rearm_required": False,
@@ -1097,7 +1097,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
             ce_state["position"] = False
             ce_state["rearm_required"] = True
-            ce_state["lot"] = 1
+            ce_state["lot"] = 2
             CE_TARGET_POINTS = CE_TARGET_POINTS + 50
 
     if pe_total >= PE_TARGET_POINTS*65:
