@@ -58,6 +58,7 @@ CE_TARGET_POINTS = 50
 TARGET_POINTS = 50
 PE_TARGET_POINTS = 50
 LOTSIZE = 65
+FUTURES_TICK_TRIGGER_POINTS = 10    
 
 today = datetime.now(IST).strftime("%Y-%m-%d")
 
@@ -973,6 +974,296 @@ def handle_futures_candle(candle):
             telemetry["pe_ltp"]
         )
 
+
+def handle_futures_tick(futures_ltp):
+
+    global combined_pnl
+
+    if futures_mark is None:
+        return
+
+    # =========================
+    # TRADING DISABLED
+    # =========================
+
+    if ce_state["trading_disabled"] and pe_state["trading_disabled"]:
+        return
+
+    # =========================================================
+    # CE TICK ENTRY
+    # FUTURES >= MARK + 10
+    # =========================================================
+
+    if (
+        not ce_state["position"]
+        and not ce_state["trading_disabled"]
+        and not ce_state["rearm_required"]
+    ):
+
+        if futures_ltp >= (
+            futures_mark + FUTURES_TICK_TRIGGER_POINTS
+        ):
+
+            entry_price = telemetry["ce_ltp"]
+
+            ce_state["entry_price"] = entry_price
+            ce_state["entry_time"] = datetime.now(IST).isoformat()
+            ce_state["position"] = True
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print(
+                f"🟢 CE TICK ENTRY | "
+                f"FUT LTP={futures_ltp} | "
+                f"MARK={futures_mark} | "
+                f"OPTION LTP={entry_price}"
+            )
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "CE",
+                        "BUY",
+                        CE_ID,
+                        "entry",
+                        "ENTRY",
+                        entry_price,
+                        ce_state["pnl"],
+                        combined_pnl,
+                        ce_state["lot"],
+                        users,
+                        ce_state["strike"]
+                    )
+                )
+            )
+
+            log_trade_event(
+                event_type="ENTRY",
+                leg_name="CE",
+                token=CE_ID,
+                symbol=SYMBOL,
+                side="BUY",
+                lot=ce_state["lot"],
+                price=entry_price,
+                reason="Futures 10 Point Tick Entry",
+                pnl=ce_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+            log_event(
+                "CE BUY",
+                CE_ID,
+                "ENTRY_EXECUTED",
+                entry_price,
+                "Futures 10 Point Tick Entry"
+            )
+
+    # =========================================================
+    # PE TICK ENTRY
+    # FUTURES <= MARK - 10
+    # =========================================================
+
+    if (
+        not pe_state["position"]
+        and not pe_state["trading_disabled"]
+        and not pe_state["rearm_required"]
+    ):
+
+        if futures_ltp <= (
+            futures_mark - FUTURES_TICK_TRIGGER_POINTS
+        ):
+
+            entry_price = telemetry["pe_ltp"]
+
+            pe_state["entry_price"] = entry_price
+            pe_state["entry_time"] = datetime.now(IST).isoformat()
+            pe_state["position"] = True
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print(
+                f"🟢 PE TICK ENTRY | "
+                f"FUT LTP={futures_ltp} | "
+                f"MARK={futures_mark} | "
+                f"OPTION LTP={entry_price}"
+            )
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "PE",
+                        "BUY",
+                        PE_ID,
+                        "entry",
+                        "ENTRY",
+                        entry_price,
+                        pe_state["pnl"],
+                        combined_pnl,
+                        pe_state["lot"],
+                        users,
+                        pe_state["strike"]
+                    )
+                )
+            )
+
+            log_trade_event(
+                event_type="ENTRY",
+                leg_name="PE",
+                token=PE_ID,
+                symbol=SYMBOL,
+                side="BUY",
+                lot=pe_state["lot"],
+                price=entry_price,
+                reason="Futures 10 Point Tick Entry",
+                pnl=pe_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+            log_event(
+                "PE BUY",
+                PE_ID,
+                "ENTRY_EXECUTED",
+                entry_price,
+                "Futures 10 Point Tick Entry"
+            )
+
+    # =========================================================
+    # CE TICK EXIT
+    # FUTURES <= MARK - 10
+    # =========================================================
+
+    if ce_state["position"]:
+
+        if futures_ltp <= (
+            futures_mark - FUTURES_TICK_TRIGGER_POINTS
+        ):
+
+            exit_price = telemetry["ce_ltp"]
+
+            pnl = (
+                exit_price -
+                ce_state["entry_price"]
+            ) * LOTSIZE * ce_state["lot"]
+
+            ce_state["pnl"] += pnl
+            combined_pnl += pnl
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print(
+                f"🔴 CE TICK EXIT | "
+                f"FUT LTP={futures_ltp} | "
+                f"MARK={futures_mark} | "
+                f"OPTION LTP={exit_price}"
+            )
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "CE",
+                        "SELL",
+                        CE_ID,
+                        "exit",
+                        "EXIT",
+                        exit_price,
+                        pnl,
+                        combined_pnl,
+                        ce_state["lot"],
+                        users,
+                        ce_state["strike"]
+                    )
+                )
+            )
+
+            log_trade_event(
+                event_type="EXIT",
+                leg_name="CE",
+                token=CE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=ce_state["lot"],
+                price=exit_price,
+                reason="Futures 10 Point Tick Exit",
+                pnl=ce_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+            ce_state["position"] = False
+
+            if ce_state["lot"] < 15:
+                ce_state["lot"] += 1
+
+    # =========================================================
+    # PE TICK EXIT
+    # FUTURES >= MARK + 10
+    # =========================================================
+
+    if pe_state["position"]:
+
+        if futures_ltp >= (
+            futures_mark + FUTURES_TICK_TRIGGER_POINTS
+        ):
+
+            exit_price = telemetry["pe_ltp"]
+
+            pnl = (
+                exit_price -
+                pe_state["entry_price"]
+            ) * LOTSIZE * pe_state["lot"]
+
+            pe_state["pnl"] += pnl
+            combined_pnl += pnl
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print(
+                f"🔴 PE TICK EXIT | "
+                f"FUT LTP={futures_ltp} | "
+                f"MARK={futures_mark} | "
+                f"OPTION LTP={exit_price}"
+            )
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "PE",
+                        "SELL",
+                        PE_ID,
+                        "exit",
+                        "EXIT",
+                        exit_price,
+                        pnl,
+                        combined_pnl,
+                        pe_state["lot"],
+                        users,
+                        pe_state["strike"]
+                    )
+                )
+            )
+
+            log_trade_event(
+                event_type="EXIT",
+                leg_name="PE",
+                token=PE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=pe_state["lot"],
+                price=exit_price,
+                reason="Futures 10 Point Tick Exit",
+                pnl=pe_state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+            pe_state["position"] = False
+
+            if pe_state["lot"] < 15:
+                pe_state["lot"] += 1
+
+
 def tick_exit_check(name, token, state, ltp):
     global combined_pnl
 
@@ -1058,6 +1349,105 @@ def universal_exit_check(ce_ltp, pe_ltp):
     # =========================
     # ✅ COMBINED EXIT (TICK LEVEL SAFE)
     # =========================
+
+
+
+    if telemetry["pnl"] >= 9500 or telemetry["pnl"] <= -13000:
+
+        print("🚨 MTM LIMIT HIT — FORCE EXIT ALL")
+
+        # CE FORCE EXIT
+        if ce_state["position"]:
+            print(f"🔴 CE FORCE EXIT | TOKEN: {CE_ID} | LTP: {telemetry.get('ce_ltp')} | TOTAL PNL: {ce_state['pnl']:.2f}")
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "CE",
+                        "SELL",
+                        str(CE_ID),
+                        "PROFIT EXIT",
+                        "EXIT",
+                        str(telemetry.get('ce_ltp')),
+                        ce_state["pnl"],
+                        combined_pnl,
+                        ce_state["lot"],
+                        users,
+                        strike = ce_strike
+                    )
+                )
+            )
+
+            log_trade_event(
+                
+                event_type="EXIT",
+                leg_name="CE",
+                token=CE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=ce_state["lot"],
+                price=telemetry.get('ce_ltp'),
+                reason="FORCE EXIT MTM",
+                pnl= ce_state["pnl"],
+                cum_pnl=combined_pnl
+                )
+
+            ce_state["position"] = False
+            ce_state["entry_price"] = None
+            ce_state["last_price"] = None
+
+        # PE FORCE EXIT
+        if pe_state["position"]:
+            print(f"🔴 PE FORCE EXIT | TOKEN: {PE_ID} | LTP: {telemetry.get('pe_ltp')} | TOTAL PNL: {pe_state['pnl']:.2f}")
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "PE",
+                        "SELL",
+                        str(PE_ID),
+                        "PROFIT EXIT",
+                        "EXIT",
+                        str(telemetry.get('pe_ltp')),
+                        pe_state["pnl"],
+                        combined_pnl,
+                        pe_state["lot"],
+                        users,
+                        strike = pe_strike
+                    )
+                )
+            )
+
+            log_trade_event(
+                
+                event_type="EXIT",
+                leg_name="PE",
+                token=PE_ID,
+                symbol=SYMBOL,
+                side="SELL",
+                lot=pe_state["lot"],
+                price=telemetry.get('pe_ltp'),
+                reason="FORCE EXIT MTM",
+                pnl= pe_state["pnl"],
+                cum_pnl=combined_pnl
+                )
+
+            pe_state["position"] = False
+            pe_state["entry_price"] = None
+            pe_state["last_price"] = None
+
+        ce_state["trading_disabled"] = True
+        pe_state["trading_disabled"] = True
+
+
 
 
     if ce_total >= CE_TARGET_POINTS*65:
@@ -1180,7 +1570,7 @@ def on_message(msg):
 
                 print("🔄 PE REARMED FROM FUTURES")
 
-
+        handle_futures_tick(ltp)
         builder = builders.get(FUT_ID)
 
         if not builder:
