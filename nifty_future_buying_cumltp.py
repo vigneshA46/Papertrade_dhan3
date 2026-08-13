@@ -132,7 +132,7 @@ def group_users_by_broker(deployments):
 
     return grouped
 
-def build_payload(name, side, token , reason,event_type,ltp,pnl,cum_pnl,lot,users,  strike):
+def build_payload(name , side , token , reason , event_type , ltp , pnl , cum_pnl , lot , users ,  strike):
 
     if name == "CE":
         row = AngelCE
@@ -145,7 +145,7 @@ def build_payload(name, side, token , reason,event_type,ltp,pnl,cum_pnl,lot,user
     month = expiry_date.strftime("%b").upper()
     year = expiry_date.strftime("%y")
 
-    symbol = f"NIFTY{day}{month}{year}{ATM}{name}"
+    symbol = f"NIFTY{day}{month}{year}{strike}{name}"
     expiry = expiry_date.strftime("%Y-%m-%d")
 
     return {
@@ -1374,7 +1374,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                         "EXIT",
                         str(telemetry.get('ce_ltp')),
                         ce_state["pnl"],
-                        combined_pnl,
+                        combined_total,
                         ce_state["lot"],
                         users,
                         strike = ce_strike
@@ -1383,7 +1383,6 @@ def universal_exit_check(ce_ltp, pe_ltp):
             )
 
             log_trade_event(
-                
                 event_type="EXIT",
                 leg_name="CE",
                 token=CE_ID,
@@ -1393,7 +1392,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 price=telemetry.get('ce_ltp'),
                 reason="FORCE EXIT MTM",
                 pnl= ce_state["pnl"],
-                cum_pnl=combined_pnl
+                cum_pnl=combined_total
                 )
 
             ce_state["position"] = False
@@ -1418,7 +1417,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                         "EXIT",
                         str(telemetry.get('pe_ltp')),
                         pe_state["pnl"],
-                        combined_pnl,
+                        combined_total,
                         pe_state["lot"],
                         users,
                         strike = pe_strike
@@ -1427,7 +1426,6 @@ def universal_exit_check(ce_ltp, pe_ltp):
             )
 
             log_trade_event(
-                
                 event_type="EXIT",
                 leg_name="PE",
                 token=PE_ID,
@@ -1437,7 +1435,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 price=telemetry.get('pe_ltp'),
                 reason="FORCE EXIT MTM",
                 pnl= pe_state["pnl"],
-                cum_pnl=combined_pnl
+                cum_pnl=combined_total
                 )
 
             pe_state["position"] = False

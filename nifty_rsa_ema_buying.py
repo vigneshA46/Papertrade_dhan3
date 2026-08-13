@@ -1319,7 +1319,6 @@ logtradeleg(
     str(pe_security_id)
 )
 
-
 ce_state["candles"] = load_history(
     ce_security_id,
     candle_count=22
@@ -1382,7 +1381,6 @@ pe_state["rsi14"], pe_state["avg_gain"], pe_state["avg_loss"] = calculate_rsi(
 
 print("PE RSI14 :", pe_state["rsi14"])
 
-
 instruments = [
     (MarketFeed.NSE_FNO, str(ce_security_id), MarketFeed.Quote),
     (MarketFeed.NSE_FNO, str(pe_security_id), MarketFeed.Quote)
@@ -1406,4 +1404,3 @@ while True:
     except Exception as e:
         print("WS ERROR:", e)
         feed.run_forever()
-        
