@@ -17,6 +17,7 @@ import asyncio
 from find_instrument import FindInstrument
 from option_chain_cache import set_option_chain, get_option_chain
 import pandas as pd
+import option_chain_manager
 
 
 # =========================
@@ -493,11 +494,7 @@ else:
 
 atm = ATM
 
-oc = dhan.option_chain(
-    under_security_id=13,
-    under_exchange_segment="IDX_I",
-    expiry=str(next_expiry)  
-)
+oc = option_chain_manager.get_option_chain()
 
 
 option_data = oc["data"]["data"]["oc"]
@@ -1665,19 +1662,17 @@ instruments = [
 feed = MarketFeed(dhan_context, instruments, "v2")
 
 TOKENS = [
-  str(CE_ID) , str(PE_ID) , str(FUT_ID)
+  str(CE_ID) , str(PE_ID)
 ]
 
-while True:
-    try:
 
-        feed.run_forever()
-        msg = feed.get_data()
+def on_tick(token, msg):
 
-        if msg:
-            on_message(msg)
+    if token not in TOKENS:
+        return  
 
-    except Exception as e:
-        print("WS ERROR:", e)
-        feed.run_forever()
-        
+    on_message(msg)
+
+for t in TOKENS:
+    subscribe(t, on_tick)
+ 

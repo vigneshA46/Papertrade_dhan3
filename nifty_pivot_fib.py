@@ -186,7 +186,7 @@ def build_payload(name, side, token , reason,event_type,ltp,pnl,cum_pnl,lot,user
     if name == "CE":
         row = AngelCE
     else:
-        row = AngelPE
+        row = AngelPE 
 
     expiry_date = get_next_expiry()
 

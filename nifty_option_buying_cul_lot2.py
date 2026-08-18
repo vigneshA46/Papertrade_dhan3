@@ -1073,8 +1073,6 @@ def on_message(msg):
 
 
 
-
-
     if telemetry["pnl"] >= 9500 or telemetry["pnl"] <= -13000:
 
         print("🚨 MTM LIMIT HIT — FORCE EXIT ALL")

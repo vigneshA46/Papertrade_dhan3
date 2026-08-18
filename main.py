@@ -26,8 +26,10 @@ import paper_trade_niftyoption50_no_reentry as strategy1
 
 option_chain_manager.update_option_chain()
 
+import  nifty_future_buying_cumltp as strategy13
+
 #import paper_trade_niftyoption8_no_reentry as strategy8
-import nifty_option_buying_cul_lot2 as strategy12
+#import nifty_option_buying_cul_lot2 as strategy12
 
 #import vwap_futures_buying as strategy7
 #import vwap_option_buying as strategy10
@@ -42,7 +44,7 @@ ALL_TOKENS = set()
 if 'strategy1' in globals():
     ALL_TOKENS.update(strategy1.TOKENS)
 
- 
+
 access_token = get_access_token()
 client_id = os.getenv("CLIENT_ID")
 dhan_context = DhanContext(client_id, access_token)
