@@ -15,7 +15,6 @@ from dispatcher import subscribe
 from queue import Queue
 import asyncio
 from find_instrument import FindInstrument
-from option_chain_cache import set_option_chain, get_option_chain
 import pandas as pd
 import option_chain_manager
 
@@ -145,6 +144,9 @@ def build_payload(name , side , token , reason , event_type , ltp , pnl , cum_pn
     day = expiry_date.strftime("%d")
     month = expiry_date.strftime("%b").upper()
     year = expiry_date.strftime("%y")
+
+    strike = str(int(strike))
+
 
     symbol = f"NIFTY{day}{month}{year}{strike}{name}"
     expiry = expiry_date.strftime("%Y-%m-%d")
@@ -434,7 +436,8 @@ threading.Thread(target=trade_log_worker, daemon=True).start()
 
 fut = get_nearest_nifty_fut(fno_df, today)
 
-FUT_ID = str(fut["SECURITY_ID"])
+#FUT_ID = str(fut["SECURITY_ID"])
+FUT_ID = "68407"
 
 print("📌 Nearest NIFTY FUT:", FUT_ID)
 print("📌 FUT Expiry:", fut["SM_EXPIRY_DATE"])
@@ -657,6 +660,8 @@ def handle_leg(
 
             exit_price = option_ltp
 
+            name = "CE" if token == CE_ID else "PE"
+
             pnl = (
                 exit_price -
                 state["entry_price"]
@@ -796,6 +801,8 @@ def handle_leg(
                 pnl=state["pnl"],
                 cum_pnl=combined_pnl
             )
+
+            state["entry_price"] = entry_price
 
             log_event(
                 f"{name} BUY",
@@ -953,23 +960,23 @@ def handle_futures_candle(candle):
     # ENTRY SIGNALS
     # =========================
 
-    if not ce_state["position"]:
-        handle_leg(
-            "CE",
-            CE_ID,
-            candle,
-            ce_state,
-            telemetry["ce_ltp"]
-        )
+    
+    handle_leg(
+        "CE",
+        CE_ID,
+        candle,
+        ce_state,
+        telemetry["ce_ltp"]
+    )
 
-    if not pe_state["position"]:
-        handle_leg(
-            "PE",
-            PE_ID,
-            candle,
-            pe_state,
-            telemetry["pe_ltp"]
-        )
+    
+    handle_leg(
+        "PE",
+        PE_ID,
+        candle,
+        pe_state,
+        telemetry["pe_ltp"]
+    )
 
 
 def handle_futures_tick(futures_ltp):
@@ -1048,6 +1055,8 @@ def handle_futures_tick(futures_ltp):
                 cum_pnl=combined_pnl
             )
 
+            ce_state["entry_price"] = entry_price
+
             log_event(
                 "CE BUY",
                 CE_ID,
@@ -1117,6 +1126,8 @@ def handle_futures_tick(futures_ltp):
                 pnl=pe_state["pnl"],
                 cum_pnl=combined_pnl
             )
+
+            pe_state["entry_price"] = entry_price
 
             log_event(
                 "PE BUY",
@@ -1453,11 +1464,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
         users = group_users_by_broker(deployments)
 
         print("FORMATTED USERS:", users)
-
-
         
-        
-
         # FORCE EXIT CE
         if ce_state["position"]:
             exit_price = ce_ltp
@@ -1595,7 +1602,6 @@ def on_message(msg):
     # =========================
 
     elif token == PE_ID:
-
         telemetry["pe_ltp"] = float(ltp or 0)
 
     else:
@@ -1606,10 +1612,7 @@ def on_message(msg):
     # UNIVERSAL EXIT
     # =========================
 
-    universal_exit_check(
-        telemetry["ce_ltp"],
-        telemetry["pe_ltp"]
-    )
+    
 
     # =========================
     # REAL-TIME PNL
@@ -1617,6 +1620,12 @@ def on_message(msg):
 
     ce_running = 0
     pe_running = 0
+
+    if ce_state["position"] or pe_state["position"]:
+        universal_exit_check(
+        telemetry["ce_ltp"],
+        telemetry["pe_ltp"]
+        )
 
     if ce_state["position"]:
 
@@ -1631,6 +1640,7 @@ def on_message(msg):
             telemetry["pe_ltp"] -
             pe_state["entry_price"]
         ) * LOTSIZE * pe_state["lot"]
+
 
     telemetry["ce_pnl"] = (
         ce_state["pnl"] +
@@ -1662,7 +1672,7 @@ instruments = [
 feed = MarketFeed(dhan_context, instruments, "v2")
 
 TOKENS = [
-  str(CE_ID) , str(PE_ID)
+  CE_ID , PE_ID , FUT_ID
 ]
 
 

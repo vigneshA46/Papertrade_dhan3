@@ -18,8 +18,8 @@ from signal_emitter import emit_signal
 import asyncio
 from find_instrument import FindInstrument
 import pandas as pd
-
 from io import StringIO
+
 
 # =========================
 # CONFIG
@@ -44,11 +44,6 @@ NSE_HOLIDAYS = {
     date(2026, 11, 24),
     date(2026, 12, 25),
 }
-
-
-
-
-
 
 trade_log_queue = Queue()
 def trade_log_worker():
@@ -90,17 +85,318 @@ INTERVAL_15M = "15"
 
 IST = pytz.timezone("Asia/Kolkata")
 
-COMMON_ID = "617126ad-4197-4272-a08f-cc2ad43b3859"
+COMMON_ID = "2f8dd0d6-b5e2-4618-a847-10ebfdf5e5d5"
 SYMBOL = "CRUDEOIL"
 
-TRADE_START = dtime(15, 31)
-TRADE_END   = dtime(22, 30)
+TRADE_START = dtime(9, 31)
+TRADE_END   = dtime(23, 30)
 
 LOTSIZE = 100
 
 today = datetime.now(IST).strftime("%Y-%m-%d")
 #today = "2026-05-18"
 
+
+telemetry = {
+    "strategy_id": COMMON_ID,
+    "run_id": COMMON_ID,
+    "status": "ACTIVE",
+    "pnl": 0,
+    "pnl_percentage": 0,
+    "ce_ltp": 0,
+    "pe_ltp": 0,
+    "ce_pnl": 0,
+    "pe_pnl": 0
+}
+
+def update_ema(state, candle):
+
+    multiplier = 2 / (9 + 1)
+
+    previous_ema = state["ema9"]
+
+    close = candle["close"]
+
+    new_ema = (
+        (close - previous_ema) * multiplier
+    ) + previous_ema
+
+    state["ema9"] = new_ema
+
+    state["candles"].append(candle)
+
+    if len(state["candles"]) > 200:
+        state["candles"].pop(0)
+
+    return new_ema
+    
+def calculate_ema(closes, period=9):
+
+    if len(closes) < period:
+        return None
+
+    multiplier = 2 / (period + 1)
+
+    ema = sum(closes[:period]) / period
+
+    for close in closes[period:]:
+        ema = ((close - ema) * multiplier) + ema
+
+    return ema
+
+def load_fno_master() -> pd.DataFrame:
+    print("...downloading FNO master")
+
+    r = requests.get(MCX_MASTER_URL, headers={"access-token": access_token})
+    r.raise_for_status()
+
+    # ✅ Use header from API (IMPORTANT)
+    df = pd.read_csv(StringIO(r.text), low_memory=False)
+
+    # ✅ Drop unwanted column
+    if "Unnamed: 31" in df.columns:
+        df = df.drop(columns=["Unnamed: 31"])
+
+    # ✅ Type conversions
+    df["STRIKE_PRICE"] = pd.to_numeric(df["STRIKE_PRICE"], errors="coerce")
+    df["SM_EXPIRY_DATE"] = pd.to_datetime(df["SM_EXPIRY_DATE"], errors="coerce")
+
+    return df
+
+def handle_leg(state, candle):
+
+    # Check EMA crossover
+    if not state["crossover_happened"]:
+        return
+
+    # Check RSI confirmation
+    if state["rsi14"] <= 50:
+        return
+
+    # Save signal candle
+    state["signal_candle"] = {
+        "high": candle["high"],
+        "low": candle["low"],
+        "close": candle["close"],
+        "time": candle["time"]
+    }
+
+    # Wait for breakout
+    state["waiting_for_breakout"] = True
+
+    print("✅ Signal Candle Created")
+
+def manage_positions(state, ltp):
+    
+    """
+    Handles:
+    1. Entry
+    2. Target Exit
+    3. Stop Loss Exit
+    """
+    global combined_pnl
+
+    # ==========================
+    # ENTRY
+    # ==========================
+    if (
+        not state["position"]
+        and state["crossover_happened"]
+        and state["rsi14"] > 50
+        and state["waiting_for_breakout"]
+        and ltp >= state["signal_candle"]["high"] + 2
+    ):
+
+        entry_price = ltp
+
+        # Store entry details
+        state["position"] = True
+        state["entry_price"] = entry_price
+
+        # Reset signal
+        state["waiting_for_breakout"] = False
+        state["crossover_happened"] = False
+        state["signal_candle"] = None
+
+        print(f"{state['leg_name']} BUY @ {entry_price}")
+
+        # ==========================
+        # ENTRY TELEMETRY / SIGNAL
+        # ==========================
+        run_async(
+            emit_signal(
+                build_payload(
+                    state["leg_name"],
+                    "BUY",
+                    state["token"],
+                    "entry",
+                    "ENTRY",
+                    entry_price,
+                    state["pnl"],
+                    combined_pnl,
+                    state["lot"],
+                    users,
+                    state["strike"]
+                )
+            )
+        )
+
+        # ==========================
+        # ENTRY TRADE LOG
+        # ==========================
+        log_trade_event(
+            event_type="ENTRY",
+            leg_name=state["leg_name"],
+            token=state["token"],
+            symbol=SYMBOL,
+            side="BUY",
+            lot=state["lot"],
+            price=entry_price,
+            reason="EMA CROSSOVER + RSI > 50 + BREAKOUT",
+            pnl=state["pnl"],
+            cum_pnl=combined_pnl
+        )
+
+        return
+
+
+    # ==========================
+    # TARGET EXIT
+    # ==========================
+    if (
+        state["position"]
+        and ltp >= state["entry_price"] + 20
+    ):
+
+        exit_price = ltp
+
+        pnl = (
+            (exit_price - state["entry_price"])
+            * LOTSIZE
+            * state["lot"]
+        )
+
+        state["pnl"] += pnl
+
+        
+        combined_pnl += pnl
+
+        print(
+            f"{state['leg_name']} TARGET HIT @ {exit_price} "
+            f"PNL: {pnl}"
+        )
+
+        # ==========================
+        # EXIT TELEMETRY / SIGNAL
+        # ==========================
+        run_async(
+            emit_signal(
+                build_payload(
+                    state["leg_name"],
+                    "SELL",
+                    state["token"],
+                    "exit",
+                    "EXIT",
+                    exit_price,
+                    state["pnl"],
+                    combined_pnl,
+                    state["lot"],
+                    users,
+                    state["strike"]
+                )
+            )
+        )
+
+        # ==========================
+        # EXIT TRADE LOG
+        # ==========================
+        log_trade_event(
+            event_type="EXIT",
+            leg_name=state["leg_name"],
+            token=state["token"],
+            symbol=SYMBOL,
+            side="SELL",
+            lot=state["lot"],
+            price=exit_price,
+            reason="TARGET HIT",
+            pnl=state["pnl"],
+            cum_pnl=combined_pnl
+        )
+
+        # Reset position
+        state["position"] = False
+        state["entry_price"] = None
+
+        return
+
+
+    # ==========================
+    # STOP LOSS EXIT
+    # ==========================
+    if (
+        state["position"]
+        and ltp <= state["entry_price"] - 20
+    ):
+
+        exit_price = ltp
+
+        pnl = (
+            (exit_price - state["entry_price"])
+            * LOTSIZE
+            * state["lot"]
+        )
+
+        state["pnl"] += pnl
+
+        combined_pnl += pnl
+
+        print(
+            f"{state['leg_name']} STOP LOSS HIT @ {exit_price} "
+            f"PNL: {pnl}"
+        )
+
+        # ==========================
+        # EXIT TELEMETRY / SIGNAL
+        # ==========================
+        run_async(
+            emit_signal(
+                build_payload(
+                    state["leg_name"],
+                    "SELL",
+                    state["token"],
+                    "exit",
+                    "EXIT",
+                    exit_price,
+                    state["pnl"],
+                    combined_pnl,
+                    state["lot"],
+                    users,
+                    state["strike"]
+                )
+            )
+        )
+
+        # ==========================
+        # EXIT TRADE LOG
+        # ==========================
+        log_trade_event(
+            event_type="EXIT",
+            leg_name=state["leg_name"],
+            token=state["token"],
+            symbol=SYMBOL,
+            side="SELL",
+            lot=state["lot"],
+            price=exit_price,
+            reason="STOP LOSS HIT",
+            pnl=state["pnl"],
+            cum_pnl=combined_pnl
+        )
+
+        # Reset position
+        state["position"] = False
+        state["entry_price"] = None
+
+        return
 
 def calculate_rsi(closes, period=14):
     """
@@ -197,7 +493,6 @@ def update_rsi(state, candle, period=14):
     state["rsi14"] = rsi
 
     return rsi
-
 
 def is_market_holiday(check_date):
     """
@@ -408,6 +703,68 @@ def get_previous_day_ohlc(security_id):
 
     return ohlc
 
+def detect_ema_bullish_crossover(state):
+    """
+    Detects bullish EMA crossover.
+
+    EMA9 crosses from below EMA21 to above EMA21.
+    """
+
+    leg = "CE" if state == ce_state else "PE"
+
+    if (
+        state["previous_ema9"] is None or
+        state["previous_ema21"] is None
+    ):
+        return False
+
+    crossover = (
+        state["previous_ema9"] <= state["previous_ema21"]
+        and
+        state["ema9"] > state["ema21"]
+    )
+
+    print("EMA Crossover Detected:" , leg)
+
+    state["crossover_happened"] = crossover
+
+    return crossover
+
+def telemetry_broadcaster():
+    while True:
+        try:
+            # 🔥 COPY to avoid mutation issues
+            payload = telemetry.copy()
+
+            # 🔥 optional: sanitize (prevents TypeError)
+            def safe_number(x):
+                try:
+                    return float(x)
+                except:
+                    return 0
+
+            payload = {k: safe_number(v) if k in ["pnl","ce_pnl","pe_pnl","ce_ltp","pe_ltp","pnl_percentage"] else v
+                for k, v in payload.items()}
+
+
+            res = requests.post(
+                "https://algoapi.dreamintraders.in/api/telemetry",
+                json=payload,
+                timeout=0.5   # 🔥 keep it LOW
+            )
+
+            # optional debug
+            if res.status_code != 200:
+                print("Telemetry failed:", res.status_code)
+
+        except Exception as e:
+            print("Telemetry error:", e)
+
+        time.sleep(1)
+
+t = threading.Thread(target=telemetry_broadcaster, daemon=True)
+t.start()
+
 
 # =========================
 # LOGIN
@@ -415,27 +772,7 @@ def get_previous_day_ohlc(security_id):
 
 dhan_context = DhanContext(client_id, access_token)
 dhan = dhanhq(dhan_context)
-
-def load_fno_master() -> pd.DataFrame:
-    print("...downloading FNO master")
-
-    r = requests.get(MCX_MASTER_URL, headers={"access-token": access_token})
-    r.raise_for_status()
-
-    # ✅ Use header from API (IMPORTANT)
-    df = pd.read_csv(StringIO(r.text), low_memory=False)
-
-    # ✅ Drop unwanted column
-    if "Unnamed: 31" in df.columns:
-        df = df.drop(columns=["Unnamed: 31"])
-
-    # ✅ Type conversions
-    df["STRIKE_PRICE"] = pd.to_numeric(df["STRIKE_PRICE"], errors="coerce")
-    df["SM_EXPIRY_DATE"] = pd.to_datetime(df["SM_EXPIRY_DATE"], errors="coerce")
-
-    return df
-
-strategy_id = "617126ad-4197-4272-a08f-cc2ad43b3859"
+strategy_id = "2f8dd0d6-b5e2-4618-a847-10ebfdf5e5d5"
 loop = asyncio.new_event_loop()
 
 def start_loop():
@@ -537,7 +874,6 @@ def build_payload(name, side, token , reason,event_type,ltp,pnl,cum_pnl,lot,user
     }
 
 
-
 def wait_for_start():
     print("⏳ Waiting for market...")
     while True:
@@ -593,7 +929,7 @@ def fetch_intraday(security_id, instrument, interval, trade_date):
 
 def get_315_candle(df):
     candle = df[
-        df["datetime"].dt.strftime("%H:%M:%S") == "15:30:00"
+        df["datetime"].dt.strftime("%H:%M:%S") == "09:30:00"
     ]
 
     if candle.empty:
@@ -768,7 +1104,11 @@ def calculate_live_rsi(state, current_ltp, period=14):
 
     state["live_rsi14"] = live_rsi
 
+    #print("Live RSI (14-period):", state["live_rsi14"])
+    #print(ce_state["live_rsi14"], pe_state["live_rsi14"])
+
     return live_rsi
+
 
 
 def init_state():
@@ -776,33 +1116,55 @@ def init_state():
         "marked": None,
         "position": False,
         "trading_disabled": False,
-        "buffer": None,
+
         "entry_price": None,
         "entry_time": None,
+
         "lot": 1,
         "pnl": 0.0,
         "symbol": None,
+
         "rearm_required": False,
+        "moment": 0.0,
+
+        # EMA
         "candles": [],
-        "rsi14": None,        # last completed candle RSI
-        "live_rsi14": None,   # current forming candle RSI
+        "ema9": None,
+        "ema21": None,
+        "pivot": None,
+        
+        "r1": None,
+        "r2": None,
+        "r3": None,
+        "s1": None,
+        "s2": None,
+        "s3": None,
+
+        # Strategy State
+        "signal_state": "IDLE",      # IDLE -> WAITING_RETEST -> IN_POSITION
+        "signal_candle": None,       # Candle which closed above EMA
+        "target": None,              # Fibonacci target
+        "stoploss": None,   
+        "waiting_retest": False,
+        "waiting_for_breakout" : False,
+        "trend": None,
+        "last_ltp": None,
+
+        "rsi14": None,
+        "live_rsi14": None,
         "avg_gain": None,
         "avg_loss": None,
+
+        "previous_ema9": None,
+        "previous_ema21": None,
+
+        "crossover_happened" : False,
+
+        "leg_name": None,
+        "token": None,
+        "strike": None,
     }
 
-
-# =========================
-# START 
-# =========================
-wait_for_start()
-
-print("\n🚀 CRUDEOIL OPTION BUYING STARTED\n")
-
-threading.Thread(target=trade_log_worker, daemon=True).start()
-
-# =========================
-# MAIN
-# =========================
 
 def find_current_month_future(df, today):
 
@@ -826,7 +1188,6 @@ def find_current_month_future(df, today):
         raise ValueError("❌ No CRUDEOIL future found")
 
     return fut.sort_values("SM_EXPIRY_DATE").iloc[0]
-
 
 
 def find_option_security(df , strike , option_type, today, target_symbol):
@@ -853,140 +1214,6 @@ def find_option_security(df , strike , option_type, today, target_symbol):
         
 
     return opt.sort_values("SM_EXPIRY_DATE").iloc[0]
-
-fno_df = load_fno_master()
-#print(fno_df.iloc[0])
-
-#today_date = datetime.now().date()
-
-currentfut = find_current_month_future(fno_df, today)
-
-currfuttoken = str(currentfut["SECURITY_ID"])
-
-print("future token", currfuttoken)
-
-fut_df = fetch_intraday(
-        currfuttoken,
-        instrument="FUTCOM",
-        interval=INTERVAL_15M,
-        trade_date=today
-    )
-
-candle_315 = get_315_candle(fut_df)
-marked_price = candle_315["close"]
-
-ATM = calculate_atm(marked_price)
-print("ATM strike price", ATM)
-
-ce_row = find_option_security(fno_df, ATM, "CE", today, "CRUDEOIL")
-pe_row = find_option_security(fno_df, ATM, "PE", today, "CRUDEOIL")
-
-
-finder = FindInstrument()
-
-AngelCE = finder.get_mcx_option("CRUDEOIL" , int(ATM) , "CE")
-AngelPE = finder.get_mcx_option("CRUDEOIL" , int(ATM) , "PE")
-
-CE_TOKEN = str(ce_row["SECURITY_ID"])
-PE_TOKEN = str(pe_row["SECURITY_ID"])
-
-builders = {
-    str(CE_TOKEN): OneMinuteCandleBuilder(),
-    str(PE_TOKEN): OneMinuteCandleBuilder()
-}
-
-
-""" # Log CE leg
-logtradeleg(
-    COMMON_ID,
-    "CE",
-    f"CRUDEOIL CE {ATM}",
-    ATM,
-    str(today),
-    CE_TOKEN
-)
-
-
-logtradeleg(
-    COMMON_ID,
-    "PE",
-    f"CRUDEOIL PE {ATM}",
-    ATM,
-    str(today),
-    PE_TOKEN
-)
- """
-print("trade leg logged")
-
-
-print("CE TOKEN", CE_TOKEN)
-print("PE TOKEN", PE_TOKEN)
-
-
-
-# =========================
-# GLOBAL STATE
-# =========================
-
-
-
-realized_pnl = 0
-restricted_mode = False
-target_hit = False
-
-
-def on_message(msg):
-
-    global combined_pnl 
-
-    if msg.get("type") != "Quote Data":
-        return
-
-    token = str(msg["security_id"])
-    ltp = float(msg.get("LTP", 0)or 0)
-
-    builder = builders.get(token)
-
-    if not builder:
-        return
-
-    candle = builder.process_tick(msg)
-
-    token = str(msg["security_id"])
-
-
-    # =========================
-    # Entry +8 Breakout
-    # =========================
-
-    if token == CE_ID:
-        state = ce_state
-        leg_name = "CE"
-        live_rsi = calculate_live_rsi(
-           ce_state,
-            ltp
-        )   
-        #print("CE LIVE RSI:", live_rsi)
-
-    elif token == PE_ID:
-        state = pe_state
-        leg_name = "PE"
-    else:
-        state = None
-    
-    # =========================
-    # CANDLE LOGIC
-    # =========================
-    if candle:
-
-        if token == CE_ID:
-            #update_rsi(ce_state , candle)
-            #ce_state["candles"].append(candle)
-            print("RSI", ce_state["live_rsi14"])
-
-            #print(
-            #    f"CE RSI14: {ce_state['rsi14']:.2f} "
-            #   )
 
 
 def load_history(security_id, candle_count=300):
@@ -1039,29 +1266,282 @@ def load_history(security_id, candle_count=300):
 
     return candles[-candle_count:]
 
+        
+def on_message(msg):
+
+    global telemetry, ce_state, pe_state
+
+    if msg.get("type") != "Quote Data":
+        return
+
+    token = str(msg["security_id"])
+    ltp = float(msg.get("LTP", 0))
+
+    builder = builders.get(token)
+
+    if not builder:
+        return
+
+    candle = builder.process_tick(msg)
+
+    # =========================
+    # TELEMETRY (REAL-TIME PnL)
+    # =========================
+    ce_running = 0
+    pe_running = 0
+
+    if ce_state["position"]:
+        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE
+
+    if pe_state["position"]:
+        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE
+
+    telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
+    telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
+    telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
+
+    # ==========================================================
+    # CE
+    # ==========================================================
+
+    if token == CE_ID:
+
+        #ce_live_rsi = calculate_live_rsi(
+        #   ce_state,
+        #    ltp
+        #)
+        #print("CE LIVE RSI", ce_live_rsi)
+        telemetry["ce_ltp"] = ltp
+        manage_positions(ce_state, ltp)
+
+        # Every completed 5-minute candle
+        if candle:
+
+            print("\n========== CE 5 MIN CANDLE ==========")
+            print(candle)
+            print("=====================================\n")
+
+            #print("CE RSI", ce_state["live_rsi14"])
+            #ce_state["rsi14"] = ce_state["live_rsi14"]
+
+            ce_state["previous_ema9"] = ce_state["ema9"]
+            ce_state["previous_ema21"] = ce_state["ema21"]
+            
+            ce_state["candles"] = load_history(
+                CE_ID,
+                candle_count=200
+            )
+
+            print("CE candles loaded")
+
+            ema_candles = ce_state["candles"]
+
+            current_minute = datetime.now(IST).replace(
+                second=0,
+                microsecond=0
+            )
+
+            last_candle_time = ema_candles[-1]["datetime"].replace(
+                second=0,
+                microsecond=0
+            )
+
+            print("current minute:", current_minute)
+            print("last candle time:", last_candle_time)
+
+            if current_minute == last_candle_time:
+                print("MATCH - removing last candle")
+                ema_candles = ema_candles[:-1]
+            else:
+                print("NO MATCH - keeping last candle")
+
+            ce_state["ema9"] = calculate_ema(
+                [c["close"] for c in ema_candles],
+                period=9
+            )
+
+            print("CE EMA9 :", ce_state["ema9"])
+
+            ce_state["ema21"] = calculate_ema(
+                [c["close"] for c in ema_candles],
+                period=21
+            )
+
+            print("CE EMA21 :", ce_state["ema21"])
 
 
+            ce_state["rsi14"], ce_state["avg_gain"], ce_state["avg_loss"] = calculate_rsi(
+                [c["close"] for c in ema_candles],
+                period=14
+            )
+
+            print(
+                f"CE RSI14: {ce_state['rsi14']:.2f} "
+    
+            )
+
+            print("CE RSI14 :", ce_state["rsi14"])
+            detect_ema_bullish_crossover(ce_state)
+
+            handle_leg(ce_state, candle)
+
+    # ==========================================================
+    # PE
+    # ==========================================================
+
+    elif token == PE_ID:
+
+        #print("PE message", msg)
+
+        #pe_live_rsi = calculate_live_rsi(
+        #    pe_state,
+        #    ltp
+        #)
+
+        #print("PE LIVE RSI", pe_live_rsi) 
+        telemetry["pe_ltp"] = ltp
+        manage_positions(pe_state, ltp)
+
+        # Every completed 5-minute candle
+        if candle:
+
+            print("\n========== PE 5 MIN CANDLE ==========")
+            print(candle)
+            print("=====================================\n")
+
+            #print("PE RSI", pe_state["live_rsi14"])
+            #pe_state["rsi14"] = pe_state["live_rsi14"]
+
+            pe_state["previous_ema9"] = pe_state["ema9"]
+            pe_state["previous_ema21"] = pe_state["ema21"]
+
+            pe_state["candles"] = load_history(
+                PE_ID,
+                candle_count=200
+            )
+
+            
+            peema_candles = pe_state["candles"]
+
+            current_minute = datetime.now(IST).replace(
+                second=0,
+                microsecond=0
+            )
+
+            last_candle_time = peema_candles[-1]["datetime"].replace(
+                second=0,
+                microsecond=0
+            )
+
+            print("current minute:", current_minute)
+            print("last candle time:", last_candle_time)
+
+            if current_minute == last_candle_time:
+                print("MATCH - removing last candle")
+                peema_candles = peema_candles[:-1]
+            else:
+                print("NO MATCH - keeping last candle")
 
 
+            pe_state["ema9"] = calculate_ema(
+                [c["close"] for c in peema_candles],
+                period=9
+            )
 
-today = datetime.now(IST).strftime("%Y-%m-%d")
+            print("PE EMA9 :", pe_state["ema9"])
 
+            pe_state["ema21"] = calculate_ema(
+                [c["close"] for c in peema_candles],
+                period=21
+            )
+
+            print("PE EMA21 :", pe_state["ema21"])
+
+            pe_state["rsi14"], pe_state["avg_gain"], pe_state["avg_loss"] = calculate_rsi(
+                [c["close"] for c in peema_candles],
+                period=14
+            )
+
+            #pe_state["candles"].append(candle)
+            detect_ema_bullish_crossover(pe_state)
+
+            handle_leg(pe_state, candle)
+
+# =========================
+# START 
+# =========================
+wait_for_start()
+
+print("\n🚀 CRUDEOIL OPTION BUYING STARTED\n")
+
+threading.Thread(target=trade_log_worker, daemon=True).start()
+
+# =========================
+# MAIN
+# =========================
+
+fno_df = load_fno_master()
+
+currentfut = find_current_month_future(fno_df, today)
+
+currfuttoken = str(currentfut["SECURITY_ID"])
+
+print("future token", currfuttoken)
+
+fut_df = fetch_intraday(
+        currfuttoken,
+        instrument="FUTCOM",
+        interval=INTERVAL_15M,
+        trade_date=today
+    )
+
+candle_315 = get_315_candle(fut_df)
+marked_price = candle_315["close"]
 
 ATM = calculate_atm(marked_price)
-print("ATM strike price :", ATM)
+print("ATM strike price", ATM)
 
 ce_row = find_option_security(fno_df, ATM, "CE", today, "CRUDEOIL")
 pe_row = find_option_security(fno_df, ATM, "PE", today, "CRUDEOIL")
 
-CE_ID = str(ce_row["SECURITY_ID"])
-PE_ID = str(pe_row["SECURITY_ID"])   
+finder = FindInstrument()
 
+AngelCE = finder.get_mcx_option("CRUDEOIL" , int(ATM) , "CE")
+AngelPE = finder.get_mcx_option("CRUDEOIL" , int(ATM) , "PE")
 
-print("security ids")
-print(CE_ID, PE_ID)
+CE_TOKEN = str(ce_row["SECURITY_ID"])
+PE_TOKEN = str(pe_row["SECURITY_ID"])
 
+CE_ID = CE_TOKEN
+PE_ID = PE_TOKEN
 
+builders = {
+    CE_TOKEN: OneMinuteCandleBuilder(),
+    PE_TOKEN: OneMinuteCandleBuilder()
+}
 
+# Log CE leg
+logtradeleg(
+    COMMON_ID,
+    "CE",
+    f"CRUDEOIL CE {ATM}",
+    ATM,
+    str(today),
+    CE_TOKEN
+)
+
+logtradeleg(
+    COMMON_ID,
+    "PE",
+    f"CRUDEOIL PE {ATM}",
+    ATM,
+    str(today),
+    PE_TOKEN
+)
+
+print("trade leg logged")
+print("CE TOKEN", CE_TOKEN)
+print("PE TOKEN", PE_TOKEN)
 
 # =========================
 # STATE
@@ -1078,8 +1558,26 @@ ce_state["candles"] = load_history(
 )
 
 
+pe_state["candles"] = load_history(
+    PE_ID,
+    candle_count=200
+)
 
 ema_candles = ce_state["candles"]
+
+ce_state["ema9"] = calculate_ema(
+    [c["close"] for c in ema_candles],
+    period=9
+)
+
+print("CE EMA9 :", ce_state["ema9"])
+
+ce_state["ema21"] = calculate_ema(
+    [c["close"] for c in ema_candles],
+    period=21
+)
+
+print("CE EMA21 :", ce_state["ema21"])
 
 current_minute = datetime.now(IST).replace(
     second=0,
@@ -1100,36 +1598,67 @@ if current_minute == last_candle_time:
 else:
     print("NO MATCH - keeping last candle")
 
-
-print("\n========== EMA CANDLES ==========")
-
-for candle in ema_candles:
-    print(
-    "Timestamp:",
-    candle["datetime"],
-    "| Close:",
-    candle["close"]
-    )
-
-print("=================================\n")
-
-
-
 ce_state["rsi14"], ce_state["avg_gain"], ce_state["avg_loss"] = calculate_rsi(
     [c["close"] for c in ema_candles],
     period=14
 )
 
 print(
-    f"CE RSI14: {ce_state['rsi14']:.2f} "
-    f"| Candle: {ce_state['candles'][-1]['datetime']}"
+    f"CE RSI14: {ce_state['rsi14']:.2f} "   
 )
 
-instruments = [
-    (MarketFeed.MCX, str(CE_ID), MarketFeed.Quote),
-    (MarketFeed.MCX, str(PE_ID), MarketFeed.Quote)
-    ]
+print("CE RSI14 :", ce_state["rsi14"])
 
+peema_candles = pe_state["candles"]
+
+pe_state["ema9"] = calculate_ema(
+    [c["close"] for c in peema_candles],
+    period=9
+)
+
+print("PE EMA9 :", pe_state["ema9"])
+
+pe_state["ema21"] = calculate_ema(
+    [c["close"] for c in peema_candles],
+    period=21
+)
+
+print("PE EMA21 :", pe_state["ema21"])
+
+current_minute = datetime.now(IST).replace(
+    second=0,
+    microsecond=0
+)
+
+last_candle_time = peema_candles[-1]["datetime"].replace(
+    second=0,
+    microsecond=0
+)
+
+print("current minute:", current_minute)
+print("last candle time:", last_candle_time)
+
+if current_minute == last_candle_time:
+    print("MATCH - removing last candle")
+    peema_candles = peema_candles[:-1]
+else:
+    print("NO MATCH - keeping last candle")
+
+pe_state["rsi14"], pe_state["avg_gain"], pe_state["avg_loss"] = calculate_rsi(
+    [c["close"] for c in peema_candles],
+    period=14
+)
+
+print(
+    f"PE RSI14: {pe_state['rsi14']:.2f} "
+    
+)
+print("PE RSI14 :", pe_state["rsi14"])
+
+instruments = [
+    (MarketFeed.MCX, str(CE_TOKEN), MarketFeed.Quote),
+    (MarketFeed.MCX, str(PE_TOKEN), MarketFeed.Quote)
+    ]
 
 feed = MarketFeed(dhan_context, instruments, "v2")
 

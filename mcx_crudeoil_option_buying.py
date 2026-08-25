@@ -1239,7 +1239,7 @@ instruments = [
 
 
 feed = MarketFeed(dhan_context, instruments, "v2")
- 
+
 while True:
     try:
         feed.run_forever()

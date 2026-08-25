@@ -28,6 +28,8 @@ option_chain_manager.update_option_chain()
 
 import  nifty_future_buying_cumltp as strategy13
 
+#import test_cumulative_ltp_210 as strategy14
+
 #import paper_trade_niftyoption8_no_reentry as strategy8
 #import nifty_option_buying_cul_lot2 as strategy12
 
@@ -43,6 +45,8 @@ rb_buying=False
 ALL_TOKENS = set()
 if 'strategy1' in globals():
     ALL_TOKENS.update(strategy1.TOKENS)
+if 'strategy13' in globals():
+    ALL_TOKENS.update(strategy13.TOKENS)  
 
 
 access_token = get_access_token()
