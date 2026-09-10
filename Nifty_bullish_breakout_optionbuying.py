@@ -18,6 +18,7 @@ from find_instrument import FindInstrument
 from option_chain_cache import set_option_chain, get_option_chain
 
 
+
 # =========================
 # CONFIG
 # =========================
@@ -36,7 +37,7 @@ ATM = None
 TRADE_LOG_URL = "https://algoapi.dreamintraders.in/api/paperlogger/event"
 EVENT_LOG_URL = "https://algoapi.dreamintraders.in/api/paperlogger/paperlogger"
 
-COMMON_ID = "2f95dbca-9602-4982-af2b-aa7bcd4aa509"
+COMMON_ID = "185ad05c-e533-46ff-b9b7-91456f2df82e"
 SYMBOL = "NIFTY"
 
 load_dotenv()
@@ -48,14 +49,15 @@ access_token = get_access_token()
 
 IST = pytz.timezone("Asia/Kolkata")
 
-TRADE_START = dtime(9, 20)
-TRADE_OPTION = dtime(9, 25)
-TRADE_END   = dtime(15, 20)
+TRADE_START = dtime(9, 15)
+TRADE_END   = dtime(15, 14)
 
 CE_TARGET_POINTS = 50
-TARGET_POINTS = 50
+
 PE_TARGET_POINTS = 50
 LOTSIZE = 65
+TARGET_POINTS = 20
+STOPLOSS_POINTS = 20
 
 today = datetime.now(IST).strftime("%Y-%m-%d")
 
@@ -68,7 +70,7 @@ dhan_context = DhanContext(client_id, access_token)
 dhan = dhanhq(dhan_context)
 fno_df = load_fno_master()
 
-strategy_id = "2f95dbca-9602-4982-af2b-aa7bcd4aa509"
+strategy_id = "185ad05c-e533-46ff-b9b7-91456f2df82e"
 
 loop = asyncio.new_event_loop()
 
@@ -268,16 +270,6 @@ def wait_for_start():
         time.sleep(1)
 
 
-def wait_for_option():
-    print("⏳ Waiting for market...")
-    while True:
-        if datetime.now(IST).time() >= TRADE_OPTION:
-            print("✅ Market Started")
-            return
-        time.sleep(1)
-
-
-
 def calculate_atm(price, step=50):
     return int(round(price / step) * step)
 
@@ -292,41 +284,6 @@ telemetry = {
     "ce_pnl": 0.0,
     "pe_pnl": 0.0
 }
-
-
-def get_second_candle_mark(security_id):
-
-    today = datetime.now(IST).strftime("%Y-%m-%d")
-   
-
-    idx= dhan.intraday_minute_data(
-        security_id=security_id,
-        exchange_segment="NSE_FNO",
-        instrument_type="OPTIDX",
-        from_date=today,
-        to_date=today,
-        interval="5"
-    )
-    print("Today :",type(today),today)
-
-    data = idx.get("data", {})
-    closes = data.get("close", [])
-    highs = data.get("high", [])
-    lows = data.get("low", [])
-    timestamps = data.get("timestamp", [])
-
-    for i in range(len(timestamps)):
-        ts = datetime.fromtimestamp(timestamps[i], IST)  
-
-        if ts.hour == 9 and ts.minute == 20:
-            high = float(highs[i])
-            low = float(lows[i])
-            print(f"📍 HIST MARK {security_id} @ high {high} , and low {low}")
-            return high , low
-
-    print("❌ 09:15 candle not found")
-    return None
-
 
 
 def telemetry_broadcaster():
@@ -385,142 +342,57 @@ def get_next_expiry():
     return next_expiry
 
 
+def handle_leg(name, token, candle, state, ltp):
 
-def on_message(msg):
+    # Only look for a new signal candle
+    # when there is no open position
+    if not state["position"]:
 
-    if msg.get("type") != "Quote Data":
-        return
+        # Red candle
+        if candle["open"] > candle["close"]:
 
-    token = str(msg["security_id"])
-    ltp = float(msg.get("LTP", 0))
+            state["signal_candle"] = True
+            state["signal_candle_high"] = candle["high"]
 
-    builder = builders.get(token)
-
-    if not builder:
-        return
-
-    candle = builder.process_tick(msg)
-
-    # =========================
-    # TELEMETRY (REAL-TIME PnL)
-    # =========================
-    ce_running = 0
-    pe_running = 0
-
-    if ce_state["position"]:
-        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE
-
-    if pe_state["position"]:
-        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE
-
-    telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
-    telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
-    telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
-
-
-
-    # ==========================================================
-    # CE
-    # ==========================================================
-
-    if token == CE_ID:
-
-        telemetry["ce_ltp"] = ltp
-        on_tick_check(
-            ce_state,
-            ltp,
-            "CE"
-            )
-
-        # Every completed 5-minute candle
-        if candle:
-
-            print("\n========== CE 1 MIN CANDLE ==========")
-            print(candle)
-            print("=====================================\n")
-            check_candle_close_exit(
-                ce_state,
-                candle,
-                "CE"
+            print(
+                f"🔴 {name} Signal Candle | "
+                f"High: {state['signal_candle_high']}"
             )
 
 
+next_expiry = get_next_expiry()
+
+
+# =============================
+# TICK-WISE ENTRY AND EXIT
+# =============================
+def tick_wise_handler(name, token, state, ltp):
+
+    global combined_pnl
+
     # ==========================================================
-    # PE
-    # ==========================================================
-
-    elif token == PE_ID:
-
-        telemetry["pe_ltp"] = ltp
-        on_tick_check(
-           pe_state,
-            ltp,
-            "PE"
-            )
-
-        # Every completed 5-minute candle
-        if candle:
-
-            print("\n========== PE 5 MIN CANDLE ==========")
-            print(candle)
-            print("=====================================\n")
-            check_candle_close_exit(
-                pe_state,
-                candle,
-                "PE"
-            )
-
-def on_tick_check(state, ltp, leg_name):
-
-    token = CE_ID if leg_name == "CE" else PE_ID
-
-    # =========================
-    # DAY TARGET
-    # =========================
-    if telemetry["pnl"] >= 1000:
-
-        print(f"🎯 DAY TARGET HIT | MTM: {telemetry['pnl']}")
-
-        ce_state["trading_disabled"] = True
-        pe_state["trading_disabled"] = True
-
-        # =========================
-        # EXIT CE
-        # =========================
-        if ce_state["position"]:
-
-            print("🔴 CE EXIT | DAY TARGET")
-
-            ce_state["position"] = False
-
-            # Actual exit will be added here later
-
-        # =========================
-        # EXIT PE
-        # =========================
-        if pe_state["position"]:
-
-            print("🔴 PE EXIT | DAY TARGET")
-
-            pe_state["position"] = False
-
-            # Actual exit will be added here later
-
-        return "DAY_TARGET"
-
-
-    # =========================
     # ENTRY
-    # =========================
-    if not state["trading_disabled"] and not state["position"]:
+    # ==========================================================
+    if (
+        not state["position"]
+        and state["signal_candle"]
+        and state["signal_candle_high"] is not None
+    ):
 
-        if ltp > state["high"]:
+        signal_high = state["signal_candle_high"]
+
+        # Breakout of signal candle high
+        if ltp > signal_high:
 
             entry_price = ltp
 
             state["entry_price"] = entry_price
             state["entry_time"] = datetime.now(IST).isoformat()
+
             state["position"] = True
+
+            # Signal has been consumed
+            state["signal_candle"] = False
 
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
@@ -528,25 +400,25 @@ def on_tick_check(state, ltp, leg_name):
             print("FORMATTED USERS:", users)
 
             print(
-                f"🟢 BUY {leg_name} | "
-                f"ENTRY: {entry_price}"
+                f"🟢 BUY {name} | "
+                f"Entry: {entry_price} | "
+                f"Signal High: {signal_high}"
             )
 
-            # =========================
-            # SEND ENTRY SIGNAL
-            # =========================
-
+            # ---------------------------------
+            # Send Entry Signal
+            # ---------------------------------
             run_async(
                 emit_signal(
                     build_payload(
-                        leg_name,
+                        name,
                         "BUY",
                         token,
                         "entry",
                         "ENTRY",
                         ltp,
                         state["pnl"],
-                        telemetry["pnl"],
+                        combined_pnl,
                         state["lot"],
                         users,
                         state["strike"]
@@ -554,81 +426,79 @@ def on_tick_check(state, ltp, leg_name):
                 )
             )
 
-            # =========================
-            # TRADE EVENT LOG
-            # =========================
-
+            # ---------------------------------
+            # Log Entry
+            # ---------------------------------
             log_trade_event(
                 event_type="ENTRY",
-                leg_name=leg_name,
+                leg_name=name,
                 token=token,
                 symbol="NIFTY",
                 side="BUY",
                 lot=state["lot"],
                 price=entry_price,
-                reason="Trade opened",
+                reason="Signal candle high breakout",
                 pnl=state["pnl"],
-                cum_pnl=telemetry["pnl"]
+                cum_pnl=combined_pnl
             )
 
-            # =========================
-            # EVENT LOG
-            # =========================
-
             log_event(
-                f"{leg_name} BUY",
+                f"{name} BUY",
                 token,
                 "ENTRY_EXECUTED",
                 entry_price,
-                "Trade opened"
+                "Signal candle high breakout"
             )
 
-            return "ENTRY"
+            return
 
 
-    # =========================
-    # TICK EXIT
-    # =========================
+    # ==========================================================
+    # EXIT
+    # ==========================================================
     if state["position"]:
 
-        if ltp < state["low"]:
+        entry_price = state["entry_price"]
+
+        # ---------------------------------
+        # STOP LOSS
+        # ---------------------------------
+        if ltp < entry_price - 20:
 
             exit_price = ltp
 
-            print(
-                f"🔴 EXIT {leg_name} | "
-                f"EXIT: {exit_price} < LOW: {state['low']}"
-            )
-
-            # Calculate this trade's P&L
             trade_pnl = (
-                (exit_price - state["entry_price"])
-                * state["lot"]
-                * LOTSIZE
-            )
+                exit_price - entry_price
+            ) * LOTSIZE * state["lot"]
 
             state["pnl"] += trade_pnl
+            combined_pnl += trade_pnl
 
             state["position"] = False
+            state["entry_price"] = None
+            state["entry_time"] = None
+
+            print(
+                f"🔴 {name} STOP LOSS | "
+                f"Entry: {entry_price} | "
+                f"Exit: {exit_price} | "
+                f"PnL: {trade_pnl}"
+            )
 
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
 
-            # =========================
-            # SEND EXIT SIGNAL
-            # =========================
-
             run_async(
                 emit_signal(
                     build_payload(
-                        leg_name,
+                        name,
                         "SELL",
                         token,
-                        "low_touch",
+                        "stoploss",
                         "EXIT",
                         ltp,
-                        state["pnl"],
-                        telemetry["pnl"],
+                        trade_pnl,
+                        combined_pnl,
                         state["lot"],
                         users,
                         state["strike"]
@@ -636,66 +506,114 @@ def on_tick_check(state, ltp, leg_name):
                 )
             )
 
-            # =========================
-            # TRADE EVENT LOG
-            # =========================
-
             log_trade_event(
                 event_type="EXIT",
-                leg_name=leg_name,
+                leg_name=name,
                 token=token,
                 symbol="NIFTY",
                 side="SELL",
                 lot=state["lot"],
                 price=exit_price,
-                reason="Low touched",
+                reason="20 point stop loss",
                 pnl=trade_pnl,
-                cum_pnl=telemetry["pnl"]
+                cum_pnl=combined_pnl
             )
-
-            # =========================
-            # EVENT LOG
-            # =========================
 
             log_event(
-                f"{leg_name} SELL",
+                f"{name} SELL",
                 token,
-                "EXIT_EXECUTED",
+                "STOPLOSS_EXIT",
                 exit_price,
-                "Low touched"
+                "20 point stop loss"
             )
 
-            return "EXIT"
+            # Clear old signal.
+            # A fresh red candle must create the next signal.
+            state["signal_candle"] = False
+            state["signal_candle_high"] = None
 
-    return None
+            return
 
 
-def check_candle_close_exit(state, candle, leg_name):
+        # ---------------------------------
+        # TARGET
+        # ---------------------------------
+        if ltp > entry_price + 20:
 
-    if state["position"]:
+            exit_price = ltp
 
-        close = float(candle["close"])
+            trade_pnl = (
+                exit_price - entry_price
+            ) * LOTSIZE * state["lot"]
 
-        if close < state["high"]:
-
-            print(
-                f"🔴 {leg_name} CANDLE CLOSE EXIT | "
-                f"CLOSE: {close} < HIGH: {state['high']}"
-            )
+            state["pnl"] += trade_pnl
+            combined_pnl += trade_pnl
 
             state["position"] = False
-            return "EXIT"
+            state["entry_price"] = None
+            state["entry_time"] = None
 
-    return None
+            print(
+                f"🟢 {name} TARGET HIT | "
+                f"Entry: {entry_price} | "
+                f"Exit: {exit_price} | "
+                f"PnL: {trade_pnl}"
+            )
 
-next_expiry = get_next_expiry()
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "target",
+                        "EXIT",
+                        ltp,
+                        trade_pnl,
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        state["strike"]
+                    )
+                )
+            )
+
+            log_trade_event(
+                event_type="EXIT",
+                leg_name=name,
+                token=token,
+                symbol="NIFTY",
+                side="SELL",
+                lot=state["lot"],
+                price=exit_price,
+                reason="20 point target",
+                pnl=trade_pnl,
+                cum_pnl=combined_pnl
+            )
+
+            log_event(
+                f"{name} SELL",
+                token,
+                "TARGET_EXIT",
+                exit_price,
+                "20 point target"
+            )
+
+            # Clear old signal.
+            # A fresh red candle must create the next signal.
+            state["signal_candle"] = False
+            state["signal_candle_high"] = None
+
+            return
+
 
 
 def init_state():
     return {
         "marked": None,
-        "high": None,
-        "low": None,
         "position": False,
         "trading_disabled": False,
         "entry_price": None,
@@ -705,16 +623,28 @@ def init_state():
         "symbol": None,
         "rearm_required": False,
         "moment":0.0,
-        "strike":None
+        "strike":None,
+        # Signal candle state
+        "signal_candle": False,
+        "signal_candle_high": None
 
     }
 
+# =========================
+# START
+# =========================
+
+
 wait_for_start()
 
+print("\n🚀 NIFTY OPTION BUYING 50 CUMULATIVE LTP STARTED\n")
 
 threading.Thread(target=trade_log_worker, daemon=True).start()
 
 
+# =========================
+# INDEX FIRST CANDLE
+# =========================
 idx = dhan.intraday_minute_data(
     security_id=13,
     exchange_segment="IDX_I",
@@ -737,7 +667,7 @@ opening_candles = []
 for i in range(len(timestamps)):
     ts = datetime.fromtimestamp(timestamps[i], IST) 
 
-    if ts.hour == 9 and 15 <= ts.minute <= 20:
+    if ts.hour == 9 and 15 <= ts.minute <= 17:
         candle = {
             "timestamp": timestamps[i],
             "open": opens[i],
@@ -759,7 +689,9 @@ else:
     print("Waiting for 9:17 candle...")
 
 
+
 atm = ATM
+
 
 
 oc = dhan.option_chain(
@@ -879,24 +811,86 @@ pe_state["strike"] = float(pe_strike)
 
 combined_pnl=0
 
-wait_for_option()
 
 
-ce_state["high"], ce_state["low"] = get_second_candle_mark(CE_ID)
-pe_state["high"], pe_state["low"] = get_second_candle_mark(PE_ID)
+def on_message(msg):
+
+    if msg.get("type") != "Quote Data":
+        return
+    
+    token = str(msg["security_id"])
+    ltp = float(msg.get("LTP", 0))
+
+    builder = builders.get(token)
+
+    if not builder:
+        return
+
+    candle = builder.process_tick(msg)
+
+    token = str(msg["security_id"])
+
+    # store LTP
+    if token == CE_ID:
+        tick_wise_handler("CE", token, ce_state, ltp)
+        telemetry["ce_ltp"] = float(ltp or 0)
+
+    if token == PE_ID:
+        tick_wise_handler("PE", token, pe_state, ltp)
+        telemetry["pe_ltp"] = float(ltp or 0)  
+
+    # =========================
+    # RUN UNIVERSAL EXIT (TICK LEVEL)
+    # =========================
+    #if "ce_ltp" in telemetry and "pe_ltp" in telemetry:
+    #    universal_exit_check(telemetry["ce_ltp"], telemetry["pe_ltp"])
+
+    # =========================
+    # CANDLE LOGIC
+    # =========================
+    if candle:
+
+        if token == CE_ID:
+            print("50 reentry CE",token)
+            print(candle)
+            handle_leg("CE", token, candle, ce_state, ltp)
+
+        if token == PE_ID:
+            print("50 reentry PE",token)
+            print(candle)
+            handle_leg("PE", token, candle, pe_state, ltp)
+
+    # =========================
+    # TELEMETRY (REAL-TIME PnL)
+    # =========================
+    ce_running = 0
+    pe_running = 0
+
+    if ce_state["position"]:
+        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
+
+    if pe_state["position"]:
+        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+
+    telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
+    telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
+    telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
 
 
+
+
+# =====================
+# START WS 
+# =====================
 
 instruments = [
-    (MarketFeed.NSE_FNO, str(CE_ID), MarketFeed.Quote),
-    (MarketFeed.NSE_FNO, str(PE_ID), MarketFeed.Quote)
+    (MarketFeed.NSE_FNO, CE_ID, MarketFeed.Quote),
+    (MarketFeed.NSE_FNO, PE_ID, MarketFeed.Quote)
 ]
 
 feed = MarketFeed(dhan_context, instruments, "v2")
 
-TOKENS = [
-  str(CE_ID) , str(PE_ID)
-]
+TOKENS = [CE_ID , PE_ID]
 
 while True:
     try:
@@ -906,8 +900,18 @@ while True:
 
         if msg:
             on_message(msg)
-
+            
     except Exception as e:
         print("WS ERROR:", e)
         feed.run_forever()
-        
+
+
+""" def on_tick(token, msg):
+
+    if token not in TOKENS:
+        return  
+
+    on_message(msg)
+
+for t in TOKENS:
+    subscribe(t, on_tick) """

@@ -7,7 +7,7 @@ import os
 from dhanhq import MarketFeed
 from dhanhq import DhanContext, dhanhq
 from dhan_token import get_access_token
-from candle_builder import OneMinuteCandleBuilder
+from candle_builder import OneMinuteCandleBuilder , FifteenMinuteCandleBuilder
 from find_security import load_fno_master, find_option_security
 import threading
 from signal_emitter import emit_signal
@@ -371,6 +371,252 @@ def get_next_expiry():
 
 next_expiry = get_next_expiry()
 
+# =============================
+# TICK-WISE ENTRY AND EXIT
+# =============================
+def tick_wise_handler(name, token, state, ltp):
+
+    global combined_pnl
+
+    # ==========================================================
+    # ENTRY
+    # ==========================================================
+    if (
+        not state["position"]
+        and state["signal_candle"]
+        and state["signal_candle_high"] is not None
+    ):
+
+        signal_high = state["signal_candle_high"]
+
+        # Breakout of signal candle high
+        if ltp > signal_high:
+
+            entry_price = ltp
+
+            state["entry_price"] = entry_price
+            state["entry_time"] = datetime.now(IST).isoformat()
+
+            state["position"] = True
+
+            # Signal has been consumed
+            state["signal_candle"] = False
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            print("FORMATTED USERS:", users)
+
+            print(
+                f"🟢 BUY {name} | "
+                f"Entry: {entry_price} | "
+                f"Signal High: {signal_high}"
+            )
+
+            # ---------------------------------
+            # Send Entry Signal
+            # ---------------------------------
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "BUY",
+                        token,
+                        "entry",
+                        "ENTRY",
+                        ltp,
+                        state["pnl"],
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        state["strike"]
+                    )
+                )
+            )
+
+            # ---------------------------------
+            # Log Entry
+            # ---------------------------------
+            log_trade_event(
+                event_type="ENTRY",
+                leg_name=name,
+                token=token,
+                symbol="NIFTY",
+                side="BUY",
+                lot=state["lot"],
+                price=entry_price,
+                reason="Signal candle high breakout",
+                pnl=state["pnl"],
+                cum_pnl=combined_pnl
+            )
+
+            log_event(
+                f"{name} BUY",
+                token,
+                "ENTRY_EXECUTED",
+                entry_price,
+                "Signal candle high breakout"
+            )
+
+            return
+
+
+    # ==========================================================
+    # EXIT
+    # ==========================================================
+    if state["position"]:
+
+        entry_price = state["entry_price"]
+
+        # ---------------------------------
+        # STOP LOSS
+        # ---------------------------------
+        if ltp < entry_price - 20:
+
+            exit_price = ltp
+
+            trade_pnl = (
+                exit_price - entry_price
+            ) * LOTSIZE * state["lot"]
+
+            state["pnl"] += trade_pnl
+            combined_pnl += trade_pnl
+
+            state["position"] = False
+            state["entry_price"] = None
+            state["entry_time"] = None
+
+            print(
+                f"🔴 {name} STOP LOSS | "
+                f"Entry: {entry_price} | "
+                f"Exit: {exit_price} | "
+                f"PnL: {trade_pnl}"
+            )
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "stoploss",
+                        "EXIT",
+                        ltp,
+                        trade_pnl,
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        state["strike"]
+                    )
+                )
+            )
+
+            log_trade_event(
+                event_type="EXIT",
+                leg_name=name,
+                token=token,
+                symbol="NIFTY",
+                side="SELL",
+                lot=state["lot"],
+                price=exit_price,
+                reason="20 point stop loss",
+                pnl=trade_pnl,
+                cum_pnl=combined_pnl
+            )
+
+            log_event(
+                f"{name} SELL",
+                token,
+                "STOPLOSS_EXIT",
+                exit_price,
+                "20 point stop loss"
+            )
+
+            # Clear old signal.
+            # A fresh red candle must create the next signal.
+            state["signal_candle"] = False
+            state["signal_candle_high"] = None
+
+            return
+
+
+        # ---------------------------------
+        # TARGET
+        # ---------------------------------
+        if ltp > entry_price + 20:
+
+            exit_price = ltp
+
+            trade_pnl = (
+                exit_price - entry_price
+            ) * LOTSIZE * state["lot"]
+
+            state["pnl"] += trade_pnl
+            combined_pnl += trade_pnl
+
+            state["position"] = False
+            state["entry_price"] = None
+            state["entry_time"] = None
+
+            print(
+                f"🟢 {name} TARGET HIT | "
+                f"Entry: {entry_price} | "
+                f"Exit: {exit_price} | "
+                f"PnL: {trade_pnl}"
+            )
+
+            deployments = get_today_deployments()
+            users = group_users_by_broker(deployments)
+
+            run_async(
+                emit_signal(
+                    build_payload(
+                        name,
+                        "SELL",
+                        token,
+                        "target",
+                        "EXIT",
+                        ltp,
+                        trade_pnl,
+                        combined_pnl,
+                        state["lot"],
+                        users,
+                        state["strike"]
+                    )
+                )
+            )
+
+            log_trade_event(
+                event_type="EXIT",
+                leg_name=name,
+                token=token,
+                symbol="NIFTY",
+                side="SELL",
+                lot=state["lot"],
+                price=exit_price,
+                reason="20 point target",
+                pnl=trade_pnl,
+                cum_pnl=combined_pnl
+            )
+
+            log_event(
+                f"{name} SELL",
+                token,
+                "TARGET_EXIT",
+                exit_price,
+                "20 point target"
+            )
+
+            # Clear old signal.
+            # A fresh red candle must create the next signal.
+            state["signal_candle"] = False
+            state["signal_candle_high"] = None
+
+            return
+
 
 def init_state():
     return {
@@ -533,8 +779,8 @@ print("📌 CE:", CE_ID)
 print("📌 PE:", PE_ID)
 
 builders = {
-    CE_ID: OneMinuteCandleBuilder(),
-    PE_ID: OneMinuteCandleBuilder()
+    CE_ID: FifteenMinuteCandleBuilder(),
+    PE_ID: FifteenMinuteCandleBuilder()
 }
 
 # Log CE leg
@@ -872,11 +1118,11 @@ def on_message(msg):
 
     # store LTP
     if token == CE_ID:
-        tick_exit_check("CE", token, ce_state, ltp)
+        #tick_wise_handler("CE", token, ce_state, ltp)
         telemetry["ce_ltp"] = float(ltp or 0)
 
     if token == PE_ID:
-        tick_exit_check("PE", token, pe_state, ltp)
+        #tick_wise_handler("PE", token, pe_state, ltp)
         telemetry["pe_ltp"] = float(ltp or 0)  
 
     # =========================

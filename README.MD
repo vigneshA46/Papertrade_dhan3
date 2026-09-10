@@ -65,6 +65,11 @@ For each option leg, the strategy continuously calculates a 9-period Exponential
 
 After a signal candle is identified, the strategy does not enter immediately. Instead, it waits for live price confirmation. A trade is executed only when the option's LTP ticks at or above the signal candle's High + 2 points. At that moment, one lot of the corresponding option is purchased.
 
+Nifty bullish breakout option buying
+
+This is an intraday NIFTY option buying strategy in which, at 09:30 AM, the strategy fetches the NIFTY option chain and selects one CE and one PE option with an LTP greater than ₹210; once selected, these CE and PE contracts remain fixed for the entire trading day. The strategy independently analyses the price chart of both selected options and looks for red candles, where Open is greater than Close. Whenever a red candle is formed, its High is marked as the active entry level, and if another red candle forms before an entry, its High replaces the previous level, making the latest red candle's High the active market line for entry. When any tick breaks the active High, the strategy enters a BUY position for one lot at the breakout price, with a target of 20 points and a stop loss of 20 points. Only one position can be active at a time in each option, meaning a new entry in the same CE or PE is allowed only after the existing position has been exited through either target or stop loss. Re-entry is allowed throughout the trading day after an existing position is closed, and the strategy continues identifying new red-candle High levels and taking fresh breakout entries until the end of the trading session. The CE and PE operate independently, so each option can generate its own entries, exits, and re-entries during the day.
+
+
 Each trade is managed with fixed risk parameters:
 
 Target: +20 points from the entry price.

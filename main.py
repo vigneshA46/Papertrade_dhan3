@@ -17,7 +17,6 @@ import threading
 
 #import delta_option_buying as strategy6
 
-
 #import Nifty_option_buying3k as strategy9
 #import Nifty_option_buying_tsl as strategy11
 import option_chain_manager
@@ -26,7 +25,7 @@ import paper_trade_niftyoption50_no_reentry as strategy1
 
 option_chain_manager.update_option_chain()
 
-import  nifty_future_buying_cumltp as strategy13
+#import nifty_future_buying_cumltp as strategy13
 
 #import test_cumulative_ltp_210 as strategy14
 
@@ -45,6 +44,7 @@ rb_buying=False
 ALL_TOKENS = set()
 if 'strategy1' in globals():
     ALL_TOKENS.update(strategy1.TOKENS)
+
 if 'strategy13' in globals():
     ALL_TOKENS.update(strategy13.TOKENS)  
 

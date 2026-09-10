@@ -1326,17 +1326,19 @@ def on_message(msg):
 
             ce_state["previous_ema9"] = ce_state["ema9"]
             ce_state["previous_ema21"] = ce_state["ema21"]
+
+            ce_state["candles"].append(candle)
             
-            ce_state["candles"] = load_history(
+            """ ce_state["candles"] = load_history(
                 CE_ID,
                 candle_count=200
-            )
+            ) """
 
             print("CE candles loaded")
 
             ema_candles = ce_state["candles"]
 
-            current_minute = datetime.now(IST).replace(
+            """ current_minute = datetime.now(IST).replace(
                 second=0,
                 microsecond=0
             )
@@ -1353,7 +1355,7 @@ def on_message(msg):
                 print("MATCH - removing last candle")
                 ema_candles = ema_candles[:-1]
             else:
-                print("NO MATCH - keeping last candle")
+                print("NO MATCH - keeping last candle") """
 
             ce_state["ema9"] = calculate_ema(
                 [c["close"] for c in ema_candles],
@@ -1415,33 +1417,12 @@ def on_message(msg):
             pe_state["previous_ema9"] = pe_state["ema9"]
             pe_state["previous_ema21"] = pe_state["ema21"]
 
-            pe_state["candles"] = load_history(
+            pe_state["candles"].append(candle)
+
+            """ pe_state["candles"] = load_history(
                 PE_ID,
                 candle_count=200
-            )
-
-            
-            peema_candles = pe_state["candles"]
-
-            current_minute = datetime.now(IST).replace(
-                second=0,
-                microsecond=0
-            )
-
-            last_candle_time = peema_candles[-1]["datetime"].replace(
-                second=0,
-                microsecond=0
-            )
-
-            print("current minute:", current_minute)
-            print("last candle time:", last_candle_time)
-
-            if current_minute == last_candle_time:
-                print("MATCH - removing last candle")
-                peema_candles = peema_candles[:-1]
-            else:
-                print("NO MATCH - keeping last candle")
-
+            ) """
 
             pe_state["ema9"] = calculate_ema(
                 [c["close"] for c in peema_candles],
@@ -1461,6 +1442,9 @@ def on_message(msg):
                 [c["close"] for c in peema_candles],
                 period=14
             )
+
+            print("PE RSI",pe_state["rsi14"])
+
 
             #pe_state["candles"].append(candle)
             detect_ema_bullish_crossover(pe_state)
