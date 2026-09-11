@@ -37,7 +37,7 @@ ATM = None
 TRADE_LOG_URL = "https://algoapi.dreamintraders.in/api/paperlogger/event"
 EVENT_LOG_URL = "https://algoapi.dreamintraders.in/api/paperlogger/paperlogger"
 
-COMMON_ID = "185ad05c-e533-46ff-b9b7-91456f2df82e"
+COMMON_ID = "44ed05e1-c641-46fe-8893-c9fce9d77560"
 SYMBOL = "NIFTY"
 
 load_dotenv()
@@ -70,7 +70,7 @@ dhan_context = DhanContext(client_id, access_token)
 dhan = dhanhq(dhan_context)
 fno_df = load_fno_master()
 
-strategy_id = "185ad05c-e533-46ff-b9b7-91456f2df82e"
+strategy_id = "44ed05e1-c641-46fe-8893-c9fce9d77560"
 
 loop = asyncio.new_event_loop()
 
@@ -344,21 +344,43 @@ def get_next_expiry():
 
 def handle_leg(name, token, candle, state, ltp):
 
-    # Only look for a new signal candle
-    # when there is no open position
-    if not state["position"]:
+    # ==========================================================
+    # DO NOT CREATE NEW SIGNAL WHILE POSITION IS OPEN
+    # ==========================================================
+    if state["position"]:
+        return
 
-        # Red candle
-        if candle["open"] > candle["close"]:
+    # ==========================================================
+    # 1. RED CANDLE → CREATE / REPLACE SIGNAL
+    # ==========================================================
+    if candle["open"] > candle["close"]:
 
-            state["signal_candle"] = True
-            state["signal_candle_high"] = candle["high"]
+        state["signal_candle"] = True
+        state["signal_candle_high"] = candle["high"]
 
-            print(
-                f"🔴 {name} Signal Candle | "
-                f"High: {state['signal_candle_high']}"
-            )
+        print(
+            f"🔴 {name} Signal Candle | "
+            f"High: {state['signal_candle_high']}"
+        )
 
+        return
+
+    # ==========================================================
+    # 2. CANDLE CLOSE ENTRY
+    # ==========================================================
+    if (
+        state["signal_candle"]
+        and state["signal_candle_high"] is not None
+        and candle["close"] >= state["signal_candle_high"]
+    ):
+
+        state["entry_requested"] = True
+
+        print(
+            f"🟢 {name} Candle Close Breakout | "
+            f"Close: {candle['close']} | "
+            f"Signal High: {state['signal_candle_high']}"
+        )
 
 next_expiry = get_next_expiry()
 
@@ -373,16 +395,29 @@ def tick_wise_handler(name, token, state, ltp):
     # ==========================================================
     # ENTRY
     # ==========================================================
-    if (
-        not state["position"]
-        and state["signal_candle"]
-        and state["signal_candle_high"] is not None
-    ):
+    if not state["position"]:
 
         signal_high = state["signal_candle_high"]
 
-        # Breakout of signal candle high
-        if ltp > signal_high:
+        # ------------------------------------------------------
+        # ENTRY CONDITION 1
+        # LTP + 4 >= SIGNAL CANDLE HIGH
+        # ------------------------------------------------------
+        tick_entry = (
+            state["signal_candle"]
+            and signal_high is not None
+            and ltp + 4 >= signal_high
+        )
+
+        # ------------------------------------------------------
+        # ENTRY CONDITION 2
+        # CANDLE CLOSE ABOVE HIGH
+        #
+        # This is triggered through handle_leg()
+        # ------------------------------------------------------
+        candle_entry = state.get("entry_requested", False)
+
+        if tick_entry or candle_entry:
 
             entry_price = ltp
 
@@ -391,22 +426,32 @@ def tick_wise_handler(name, token, state, ltp):
 
             state["position"] = True
 
-            # Signal has been consumed
+            # --------------------------------------------------
+            # INITIAL TRAILING STATE
+            # --------------------------------------------------
+            state["highest_price"] = entry_price
+            state["trailing_sl"] = entry_price - STOPLOSS_POINTS
+            state["trailing_active"] = False
+
+            # --------------------------------------------------
+            # CONSUME SIGNAL
+            # --------------------------------------------------
             state["signal_candle"] = False
+            state["signal_candle_high"] = None
+            state["entry_requested"] = False
 
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
 
-            print("FORMATTED USERS:", users)
-
             print(
                 f"🟢 BUY {name} | "
                 f"Entry: {entry_price} | "
-                f"Signal High: {signal_high}"
+                f"Reason: "
+                f"{'Candle Close Breakout' if candle_entry else 'LTP + 4 Breakout'}"
             )
 
             # ---------------------------------
-            # Send Entry Signal
+            # SEND ENTRY SIGNAL
             # ---------------------------------
             run_async(
                 emit_signal(
@@ -427,8 +472,14 @@ def tick_wise_handler(name, token, state, ltp):
             )
 
             # ---------------------------------
-            # Log Entry
+            # LOG ENTRY
             # ---------------------------------
+            entry_reason = (
+                "Candle close above signal high"
+                if candle_entry
+                else "LTP + 4 reached signal candle high"
+            )
+
             log_trade_event(
                 event_type="ENTRY",
                 leg_name=name,
@@ -437,7 +488,7 @@ def tick_wise_handler(name, token, state, ltp):
                 side="BUY",
                 lot=state["lot"],
                 price=entry_price,
-                reason="Signal candle high breakout",
+                reason=entry_reason,
                 pnl=state["pnl"],
                 cum_pnl=combined_pnl
             )
@@ -447,11 +498,10 @@ def tick_wise_handler(name, token, state, ltp):
                 token,
                 "ENTRY_EXECUTED",
                 entry_price,
-                "Signal candle high breakout"
+                entry_reason
             )
 
             return
-
 
     # ==========================================================
     # EXIT
@@ -460,10 +510,58 @@ def tick_wise_handler(name, token, state, ltp):
 
         entry_price = state["entry_price"]
 
-        # ---------------------------------
-        # STOP LOSS
-        # ---------------------------------
-        if ltp < entry_price - 20:
+        # ======================================================
+        # UPDATE HIGHEST PRICE
+        # ======================================================
+        if state["highest_price"] is None:
+            state["highest_price"] = entry_price
+
+        if ltp > state["highest_price"]:
+            state["highest_price"] = ltp
+
+        # ======================================================
+        # TRAILING SL ACTIVATION
+        #
+        # Profit reaches +17 points
+        # SL becomes +15 points
+        #
+        # Example:
+        # Entry 200
+        # LTP 217
+        # SL = 215
+        # ======================================================
+        profit_points = ltp - entry_price
+
+        if profit_points >= 17:
+
+            state["trailing_active"] = True
+
+            new_trailing_sl = state["highest_price"] - 2
+
+            # SL can ONLY move upward
+            if (
+                state["trailing_sl"] is None
+                or new_trailing_sl > state["trailing_sl"]
+            ):
+                state["trailing_sl"] = new_trailing_sl
+
+                print(
+                    f"🔄 {name} TRAILING SL | "
+                    f"Entry: {entry_price} | "
+                    f"LTP: {ltp} | "
+                    f"Highest: {state['highest_price']} | "
+                    f"New SL: {state['trailing_sl']}"
+                )
+
+        # ======================================================
+        # CURRENT STOP LOSS
+        # ======================================================
+        current_sl = state["trailing_sl"]
+
+        # ======================================================
+        # STOP LOSS / TRAILING STOP EXIT
+        # ======================================================
+        if current_sl is not None and ltp <= current_sl:
 
             exit_price = ltp
 
@@ -474,20 +572,36 @@ def tick_wise_handler(name, token, state, ltp):
             state["pnl"] += trade_pnl
             combined_pnl += trade_pnl
 
-            state["position"] = False
-            state["entry_price"] = None
-            state["entry_time"] = None
+            # -----------------------------------------------
+            # DETERMINE EXIT REASON
+            # -----------------------------------------------
+            if state["trailing_active"]:
+                exit_reason = "Trailing stop loss"
+                log_reason = (
+                    f"Trailing SL hit | "
+                    f"SL: {current_sl}"
+                )
+                event_reason = "TRAILING_STOP_EXIT"
+
+            else:
+                exit_reason = "20 point stop loss"
+                log_reason = "20 point stop loss"
+                event_reason = "STOPLOSS_EXIT"
 
             print(
-                f"🔴 {name} STOP LOSS | "
+                f"🔴 {name} {exit_reason} | "
                 f"Entry: {entry_price} | "
                 f"Exit: {exit_price} | "
+                f"SL: {current_sl} | "
                 f"PnL: {trade_pnl}"
             )
 
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
 
+            # ---------------------------------
+            # SEND EXIT SIGNAL
+            # ---------------------------------
             run_async(
                 emit_signal(
                     build_payload(
@@ -506,6 +620,9 @@ def tick_wise_handler(name, token, state, ltp):
                 )
             )
 
+            # ---------------------------------
+            # LOG EXIT
+            # ---------------------------------
             log_trade_event(
                 event_type="EXIT",
                 leg_name=name,
@@ -514,7 +631,7 @@ def tick_wise_handler(name, token, state, ltp):
                 side="SELL",
                 lot=state["lot"],
                 price=exit_price,
-                reason="20 point stop loss",
+                reason=log_reason,
                 pnl=trade_pnl,
                 cum_pnl=combined_pnl
             )
@@ -522,90 +639,30 @@ def tick_wise_handler(name, token, state, ltp):
             log_event(
                 f"{name} SELL",
                 token,
-                "STOPLOSS_EXIT",
+                event_reason,
                 exit_price,
-                "20 point stop loss"
+                log_reason
             )
 
-            # Clear old signal.
-            # A fresh red candle must create the next signal.
-            state["signal_candle"] = False
-            state["signal_candle_high"] = None
-
-            return
-
-
-        # ---------------------------------
-        # TARGET
-        # ---------------------------------
-        if ltp > entry_price + 20:
-
-            exit_price = ltp
-
-            trade_pnl = (
-                exit_price - entry_price
-            ) * LOTSIZE * state["lot"]
-
-            state["pnl"] += trade_pnl
-            combined_pnl += trade_pnl
-
+            # ---------------------------------
+            # RESET POSITION
+            # ---------------------------------
             state["position"] = False
             state["entry_price"] = None
             state["entry_time"] = None
 
-            print(
-                f"🟢 {name} TARGET HIT | "
-                f"Entry: {entry_price} | "
-                f"Exit: {exit_price} | "
-                f"PnL: {trade_pnl}"
-            )
+            state["highest_price"] = None
+            state["trailing_sl"] = None
+            state["trailing_active"] = False
 
-            deployments = get_today_deployments()
-            users = group_users_by_broker(deployments)
-
-            run_async(
-                emit_signal(
-                    build_payload(
-                        name,
-                        "SELL",
-                        token,
-                        "target",
-                        "EXIT",
-                        ltp,
-                        trade_pnl,
-                        combined_pnl,
-                        state["lot"],
-                        users,
-                        state["strike"]
-                    )
-                )
-            )
-
-            log_trade_event(
-                event_type="EXIT",
-                leg_name=name,
-                token=token,
-                symbol="NIFTY",
-                side="SELL",
-                lot=state["lot"],
-                price=exit_price,
-                reason="20 point target",
-                pnl=trade_pnl,
-                cum_pnl=combined_pnl
-            )
-
-            log_event(
-                f"{name} SELL",
-                token,
-                "TARGET_EXIT",
-                exit_price,
-                "20 point target"
-            )
-
-            # Clear old signal.
-            # A fresh red candle must create the next signal.
+            # ---------------------------------
+            # CLEAR OLD SIGNAL
+            #
+            # Fresh red candle required for re-entry
+            # ---------------------------------
             state["signal_candle"] = False
             state["signal_candle_high"] = None
+            state["entry_requested"] = False
 
             return
 
@@ -616,19 +673,40 @@ def init_state():
         "marked": None,
         "position": False,
         "trading_disabled": False,
+
+        # Entry information
         "entry_price": None,
         "entry_time": None,
-        "lot": 1,
-        "pnl": 0.0,
-        "symbol": None,
-        "rearm_required": False,
-        "moment":0.0,
-        "strike":None,
-        # Signal candle state
-        "signal_candle": False,
-        "signal_candle_high": None
 
+        # Position
+        "lot": 1,
+
+        # PnL
+        "pnl": 0.0,
+
+        # Instrument
+        "symbol": None,
+        "strike": None,
+
+        # Old fields
+        "rearm_required": False,
+        "moment": 0.0,
+
+        # =========================
+        # SIGNAL CANDLE
+        # =========================
+        "signal_candle": False,
+        "signal_candle_high": None,
+
+        # =========================
+        # TRAILING SL
+        # =========================
+        "highest_price": None,
+        "trailing_sl": None,
+        "trailing_active": False,
+        "entry_requested": False,
     }
+
 
 # =========================
 # START
@@ -772,8 +850,8 @@ print("📌 CE:", CE_ID)
 print("📌 PE:", PE_ID)
 
 builders = {
-    CE_ID: OneMinuteCandleBuilder(),
-    PE_ID: OneMinuteCandleBuilder()
+    CE_ID: FiveMinuteCandleBuilder(),
+    PE_ID: FiveMinuteCandleBuilder()
 }
 
 # Log CE leg

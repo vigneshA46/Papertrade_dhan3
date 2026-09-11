@@ -466,13 +466,13 @@ else:
 
 atm = ATM
 
-oc = dhan.option_chain(
+""" oc = dhan.option_chain(
     under_security_id=13,
     under_exchange_segment="IDX_I",
     expiry=str(next_expiry)  
-)
+) """
 
-#oc = option_chain_manager.get_option_chain()
+oc = option_chain_manager.get_option_chain()
 
 
 option_data = oc["data"]["data"]["oc"]
@@ -869,13 +869,17 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
 def on_message(msg):
 
+    global ce_state, pe_state, telemetry, combined_pnl , CE_ID , PE_ID
+
+    state = ce_state if str(msg["security_id"]) == CE_ID else pe_state
+
+    name = "CE" if str(msg["security_id"]) == CE_ID else "PE"
+
     if msg.get("type") != "Quote Data":
         return
     
     token = str(msg["security_id"])
     ltp = float(msg.get("LTP", 0))
-
-    state = ce_state if str(msg["security_id"]) == CE_ID else pe_state
 
     builder = builders.get(token)
 
@@ -933,10 +937,11 @@ def on_message(msg):
     telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
 
     combined_pnl = telemetry["pnl"]
+
         
     if not state["position"] and not state["rearm_required"]:
 
-        if ltp >= state["marked"] + 15:
+        if ltp >= state["marked"] + 10:
 
             entry_price = ltp   
 
@@ -970,13 +975,14 @@ def on_message(msg):
 
             log_event(f"{name} BUY", token, "ENTRY_EXECUTED", entry_price, "Trade opened")
 
-    if telemetry["pnl"] >= 9500 or telemetry["pnl"] <= -13000:
+
+    if telemetry["pnl"] <= -13000:
 
         print("🚨 MTM LIMIT HIT — FORCE EXIT ALL")
 
         # CE FORCE EXIT
         if ce_state["position"]:
-            print(f"🔴 CE FORCE EXIT | TOKEN: {CE_ID} | LTP: {telemetry.get('ce_ltp')} | TOTAL PNL: {ce_state['pnl']:.2f}")
+            print(f"🔴 CE FORCE EXIT | TOKEN: {CE_ID} | LTP: {telemetry.get('ce_ltp')} | TOTAL PNL: {telemetry['ce_pnl']:.2f}")
 
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
@@ -991,7 +997,7 @@ def on_message(msg):
                         "PROFIT EXIT",
                         "EXIT",
                         str(telemetry.get('ce_ltp')),
-                        ce_state["pnl"],
+                        telemetry["ce_pnl"],
                         combined_pnl,
                         ce_state["lot"],
                         users,
@@ -1010,7 +1016,7 @@ def on_message(msg):
                 lot=ce_state["lot"],
                 price=telemetry.get('ce_ltp'),
                 reason="FORCE EXIT MTM",
-                pnl= ce_state["pnl"],
+                pnl= telemetry["ce_pnl"],
                 cum_pnl=combined_pnl
                 )
 
@@ -1020,7 +1026,7 @@ def on_message(msg):
 
         # PE FORCE EXIT
         if pe_state["position"]:
-            print(f"🔴 PE FORCE EXIT | TOKEN: {PE_ID} | LTP: {telemetry.get('pe_ltp')} | TOTAL PNL: {pe_state['pnl']:.2f}")
+            print(f"🔴 PE FORCE EXIT | TOKEN: {PE_ID} | LTP: {telemetry.get('pe_ltp')} | TOTAL PNL: {telemetry['pe_pnl']:.2f}")
 
             deployments = get_today_deployments()
             users = group_users_by_broker(deployments)
@@ -1035,7 +1041,7 @@ def on_message(msg):
                         "PROFIT EXIT",
                         "EXIT",
                         str(telemetry.get('pe_ltp')),
-                        pe_state["pnl"],
+                        telemetry["pe_pnl"],
                         combined_pnl,
                         pe_state["lot"],
                         users,
@@ -1054,7 +1060,7 @@ def on_message(msg):
                 lot=pe_state["lot"],
                 price=telemetry.get('pe_ltp'),
                 reason="FORCE EXIT MTM",
-                pnl= pe_state["pnl"],
+                pnl= telemetry["pe_pnl"],
                 cum_pnl=combined_pnl
                 )
 
