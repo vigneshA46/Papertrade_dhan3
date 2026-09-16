@@ -7,7 +7,7 @@ import os
 from dhanhq import MarketFeed
 from dhanhq import DhanContext, dhanhq
 from dhan_token import get_access_token
-from candle_builder import OneMinuteCandleBuilder , FiveMinuteCandleBuilder
+from candle_builder import OneMinuteCandleBuilder , FiveMinuteCandleBuilder , FifteenMinuteCandleBuilder
 from find_security import load_fno_master, find_option_security
 import threading
 from signal_emitter import emit_signal
@@ -850,8 +850,8 @@ print("📌 CE:", CE_ID)
 print("📌 PE:", PE_ID)
 
 builders = {
-    CE_ID: FiveMinuteCandleBuilder(),
-    PE_ID: FiveMinuteCandleBuilder()
+    CE_ID: FifteenMinuteCandleBuilder(),
+    PE_ID: FifteenMinuteCandleBuilder()
 }
 
 # Log CE leg
