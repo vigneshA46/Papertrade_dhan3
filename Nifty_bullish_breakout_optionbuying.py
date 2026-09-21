@@ -406,7 +406,7 @@ def tick_wise_handler(name, token, state, ltp):
         tick_entry = (
             state["signal_candle"]
             and signal_high is not None
-            and ltp + 4 >= signal_high
+            and ltp >= signal_high + 4
         )
 
         # ------------------------------------------------------
