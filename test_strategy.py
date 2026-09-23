@@ -881,7 +881,7 @@ def on_message(msg):
 
     if not state["position"] and not state["rearm_required"] and not state["trading_disabled"]:
 
-        if ltp >= state["marked"] + 2:
+        if ltp >= state["marked"] + 10:
 
             entry_price = ltp   
 

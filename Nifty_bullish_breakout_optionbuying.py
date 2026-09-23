@@ -160,7 +160,7 @@ def build_payload(name, side, token , reason,event_type,ltp,pnl,cum_pnl,lot,user
         "symbol": symbol,
         "exchange": "NFO",
         "expiry":expiry,
-        "strike": strike,
+        "strike": int(strike),
         "price":ltp,
         "pnl":pnl,
         "cum_pnl":cum_pnl,
