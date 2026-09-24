@@ -82,6 +82,11 @@ The strategy allows a maximum of two trades per trading day (subject to whether 
 Overall, the strategy combines trend identification (EMA crossover), momentum confirmation (RSI > 50), and breakout confirmation (High + 2 trigger) before entering a trade, while using predefined profit targets, stop losses, and daily trade limits to maintain consistent execution.
 
 
+NIFTY RSI SCALPING
+
+This is an intraday NIFTY option-buying strategy that starts at 9:15 AM by fetching the NIFTY option chain and selecting one CE and one PE option with a current LTP of ₹210 or above. Once selected, the same CE and PE contracts are traded independently throughout the day using 3-minute candles. For each option, RSI is calculated on every completed 3-minute candle. Whenever RSI falls to or below 30, a buy setup is activated, and when any subsequent candle closes with RSI above 30, an entry signal is generated for the next candle, with the trade being entered at the next candle's open price. Each trade has a fixed 10-point target and a 10-point stop loss. After a trade is closed, the strategy can continue monitoring the same option for another valid RSI setup and re-enter during the trading day.
+
+
 google sheet logging
 
 vwap option buying -- not done

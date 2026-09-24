@@ -17,6 +17,26 @@ import asyncio
 from find_instrument import FindInstrument
 import option_chain_manager
 
+NSE_HOLIDAYS = {
+    date(2026, 1, 15),
+    date(2026, 1, 26),
+    date(2026, 3, 3),
+    date(2026, 3, 26),
+    date(2026, 3, 31),
+    date(2026, 4, 3),
+    date(2026, 4, 14),
+    date(2026, 5, 1),
+    date(2026, 5, 28),
+    date(2026, 6, 26),
+    date(2026, 9, 14),
+    date(2026, 10, 2),
+    date(2026, 10, 20),
+    date(2026, 11, 10),
+    date(2026, 11, 24),
+    date(2026, 12, 25),
+}
+
+
 
 # =========================
 # CONFIG
@@ -382,6 +402,301 @@ def get_next_expiry():
 next_expiry = get_next_expiry()
 
 
+def update_rsi(state, candle, period=14):
+    """
+    Updates RSI using Wilder's smoothing.
+
+    Requires:
+        state["avg_gain"]
+        state["avg_loss"]
+        state["rsi14"]
+        state["candles"]
+
+    Returns:
+        Latest RSI
+    """
+
+    if len(state["candles"]) == 0:
+        return None
+
+    previous_close = state["candles"][-1]["close"]
+    current_close = candle["close"]
+
+    change = current_close - previous_close
+
+    gain = max(change, 0)
+    loss = max(-change, 0)
+
+    avg_gain = (
+        (state["avg_gain"] * (period - 1)) + gain
+    ) / period
+
+    avg_loss = (
+        (state["avg_loss"] * (period - 1)) + loss
+    ) / period
+
+    state["avg_gain"] = avg_gain
+    state["avg_loss"] = avg_loss
+
+    if avg_loss == 0:
+        rsi = 100
+    else:
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+    state["rsi14"] = rsi
+
+    return rsi
+
+
+def calculate_rsi(closes, period=14):
+    """
+    Calculates initial RSI using Wilder's method.
+
+    Returns:
+        rsi, avg_gain, avg_loss
+    """
+
+    if len(closes) < period + 1:
+        return None, None, None
+
+    gains = []
+    losses = []
+
+    for i in range(1, period + 1):
+        change = closes[i] - closes[i - 1]
+
+        if change > 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(change))
+
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+
+    # Prevent divide-by-zero
+    if avg_loss == 0:
+        rsi = 100
+    else:
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+    return rsi, avg_gain, avg_loss
+
+
+
+def is_market_holiday(check_date):
+    """
+    Returns True if the given date is
+    a weekend or NSE holiday.
+    """
+
+    if isinstance(check_date, datetime):
+        check_date = check_date.date()
+
+    # Saturday = 5, Sunday = 6
+    if check_date.weekday() >= 5:
+        return True
+
+    return check_date in NSE_HOLIDAYS
+
+def get_previous_trading_day(current_date):
+    """
+    Returns the previous market trading day.
+    """
+
+    if isinstance(current_date, datetime):
+        current_date = current_date.date()
+
+    current_date -= timedelta(days=1)
+
+    while is_market_holiday(current_date):
+        current_date -= timedelta(days=1)
+
+    return current_date
+
+def count_market_minutes_back(end_time, minutes):
+    """
+    Walk backwards through MARKET trading minutes only.
+    Skips weekends, NSE holidays and non-market hours.
+    """
+
+    current = end_time
+    remaining = minutes
+
+    while remaining > 0:
+
+        market_open = current.replace(
+            hour=9,
+            minute=15,
+            second=0,
+            microsecond=0
+        )
+
+        available = int(
+            (current - market_open).total_seconds() / 60
+        )
+
+        if available >= remaining:
+            return current - timedelta(minutes=remaining)
+
+        remaining -= available
+
+        prev_day = get_previous_trading_day(current)
+
+        current = IST.localize(
+            datetime.combine(prev_day, MARKET_CLOSE)
+        )
+
+    return current
+
+def get_last_market_time():
+    """
+    Returns the latest valid market timestamp.
+
+    Handles:
+    - Before market open
+    - During market
+    - After market
+    - Weekends
+    - NSE holidays
+    """
+
+    now = datetime.now(IST)
+
+    # Holiday / Weekend
+    if is_market_holiday(now):
+
+        prev_day = get_previous_trading_day(now)
+
+        return IST.localize(
+            datetime.combine(prev_day, MARKET_CLOSE)
+        )
+
+    market_open = now.replace(
+        hour=9,
+        minute=15,
+        second=0,
+        microsecond=0
+    )
+
+    market_close = now.replace(
+        hour=15,
+        minute=30,
+        second=0,
+        microsecond=0
+    )
+
+    # Before market opens
+    if now < market_open:
+
+        prev_day = get_previous_trading_day(now)
+
+        return IST.localize(
+            datetime.combine(prev_day, MARKET_CLOSE)
+        )
+
+    # During market
+    if market_open <= now <= market_close:
+        return now.replace(second=0, microsecond=0)
+
+    # After market closes
+    return market_close
+
+def get_market_history_window(candle_count=10, interval=1):
+    """
+    Returns the history window required
+    to fetch the last completed market candles.
+    """
+
+    end_time = get_last_market_time()
+
+    required_minutes = candle_count * interval
+
+    start_time = count_market_minutes_back(
+        end_time,
+        required_minutes
+    )
+
+    return start_time, end_time
+
+def get_previous_day_ohlc(security_id):
+    """
+    Fetches previous trading day's OHLC from 5-minute candles.
+    This is much more reliable than requesting a single day's window.
+    """
+
+    today = datetime.now(IST).date()
+    previous_day = get_previous_trading_day(today)
+
+    # Fetch last 3 calendar days
+    from_date = previous_day - timedelta(days=2)
+
+    start = datetime.combine(from_date, MARKET_OPEN)
+    end = datetime.combine(today, MARKET_CLOSE)
+
+    print("\n========== FETCHING PREVIOUS DAY DATA ==========")
+    print("From :", start)
+    print("To   :", end)
+    print("===============================================\n")
+
+    data = dhan.intraday_minute_data(
+        security_id=str(security_id),
+        exchange_segment="NSE_FNO",
+        instrument_type="OPTIDX",
+        from_date=start.strftime("%Y-%m-%d %H:%M:%S"),
+        to_date=end.strftime("%Y-%m-%d %H:%M:%S"),
+        interval=1
+    )
+
+    if data.get("status") != "success":
+        print(data)
+        return None
+
+    raw = data["data"]
+
+    highs = raw["high"]
+    lows = raw["low"]
+    closes = raw["close"]
+    timestamps = raw["timestamp"]
+
+    previous_day_high = []
+    previous_day_low = []
+    previous_day_close = []
+
+    for i in range(len(timestamps)):
+
+        candle_time = datetime.fromtimestamp(
+            timestamps[i],
+            IST
+        )
+
+        if candle_time.date() == previous_day:
+
+            previous_day_high.append(float(highs[i]))
+            previous_day_low.append(float(lows[i]))
+            previous_day_close.append(float(closes[i]))
+
+    if len(previous_day_close) == 0:
+
+        print("No previous day candles found.")
+        return None
+
+    ohlc = {
+
+        "high": max(previous_day_high),
+
+        "low": min(previous_day_low),
+
+        "close": previous_day_close[-1]
+
+    }
+
+    return ohlc
+
+
 def init_state():
     return {
         "marked": None,
@@ -396,3 +711,95 @@ def init_state():
         "moment":0.0,
         "strike":None
     }
+
+
+
+# =========================
+# CALLBACKS
+# =========================
+
+
+def on_message(msg):
+
+    if msg.get("type") != "Quote Data":
+        return
+    
+    token = str(msg["security_id"])
+    ltp = float(msg.get("LTP", 0))
+
+    builder = builders.get(token)
+
+    if not builder:
+        return
+
+    candle = builder.process_tick(msg)
+
+    token = str(msg["security_id"])
+
+    # store LTP
+    if token == CE_ID:
+        #tick_wise_handler("CE", token, ce_state, ltp)
+        telemetry["ce_ltp"] = float(ltp or 0)
+
+    if token == PE_ID:
+        #tick_wise_handler("PE", token, pe_state, ltp)
+        telemetry["pe_ltp"] = float(ltp or 0)  
+
+    # =========================
+    # RUN UNIVERSAL EXIT (TICK LEVEL)
+    # =========================
+    if "ce_ltp" in telemetry and "pe_ltp" in telemetry:
+
+        # for target and zz
+        universal_exit_check(telemetry["ce_ltp"], telemetry["pe_ltp"])
+
+    # =========================
+    # CANDLE LOGIC
+    # =========================
+    if candle:
+
+        if token == CE_ID:
+            print("50 reentry CE",token)
+            print(candle)
+            handle_leg("CE", token, candle, ce_state, ltp)
+
+        if token == PE_ID:
+            print("50 reentry PE",token)
+            print(candle)
+            handle_leg("PE", token, candle, pe_state, ltp)
+
+    # =========================
+    # TELEMETRY (REAL-TIME PnL)
+    # =========================
+    ce_running = 0
+    pe_running = 0
+
+    if ce_state["position"]:
+        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
+
+    if pe_state["position"]:
+        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+
+    telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
+    telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
+    telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
+
+
+
+
+# =====================
+# START WS 
+# =====================
+
+
+TOKENS = [CE_ID , PE_ID]
+
+def on_tick(token, msg):
+
+    if token not in TOKENS:
+        return  
+
+    on_message(msg)
+
+for t in TOKENS:
+    subscribe(t, on_tick)
