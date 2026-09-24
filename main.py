@@ -15,6 +15,8 @@ import threading
 #import nifty_option_buying_cumulative_ltp as straegy16
 
 
+
+
 #import delta_option_buying as strategy6
 
 #import Nifty_option_buying3k as strategy9
