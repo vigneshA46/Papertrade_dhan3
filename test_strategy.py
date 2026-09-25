@@ -60,8 +60,6 @@ LOTSIZE = 65
 today = datetime.now(IST).strftime("%Y-%m-%d")
 
 
-
-
 # =========================
 # LOGIN
 # =========================
@@ -816,7 +814,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 price=exit_price,
                 reason="UNIVERSAL EXIT",
                 pnl= telemetry["ce_pnl"],
-                cum_pnl=telemetry["pnl"]
+                cum_pnl=combined_total
                 )   
 
             ce_state["position"] = False
@@ -854,7 +852,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 price=exit_price,
                 reason="UNIVERSAL EXIT",
                 pnl= telemetry["pe_pnl"],
-                cum_pnl=telemetry["pnl"]
+                cum_pnl=combined_total
                 )
 
             pe_state["position"] = False
