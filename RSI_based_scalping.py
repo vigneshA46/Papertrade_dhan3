@@ -71,9 +71,13 @@ IST = pytz.timezone("Asia/Kolkata")
 TRADE_START = dtime(9, 16)
 TRADE_END   = dtime(15, 14)
 
-CE_TARGET_POINTS = 50
-TARGET_POINTS = 50
-PE_TARGET_POINTS = 50
+CE_TARGET_POINTS = 10
+PE_TARGET_POINTS = 10
+TARGET_POINTS = 10
+
+CE_SL_POINTS = 10
+PE_SL_POINTS = 10
+
 LOTSIZE = 65
 
 
@@ -697,21 +701,308 @@ def get_previous_day_ohlc(security_id):
     return ohlc
 
 
+def check_target_stop(leg_name, token, state, ltp):
+
+    if not state["position"]:
+        return
+
+    ltp = float(ltp)
+
+    target = state["target_price"]
+    stop = state["stop_price"]
+
+    # TARGET
+    if ltp >= target:
+
+        exit_trade(
+            leg_name,
+            token,
+            state,
+            ltp,
+            "TARGET_10_POINTS"
+        )
+
+        return
+
+    # STOP LOSS
+    if ltp <= stop:
+
+        exit_trade(
+            leg_name,
+            token,
+            state,
+            ltp,
+            "STOPLOSS_10_POINTS"
+        )
+
+        return
+
+def process_rsi_signal(state, candle):
+    """
+    Process completed 5-minute candle RSI.
+
+    Logic:
+        RSI <= 30
+            -> activate oversold state
+
+        Later RSI > 30
+            -> prepare entry on next candle
+    """
+
+    rsi = update_rsi(state, candle)
+
+    if rsi is None:
+        return None
+
+    candle_time = candle["datetime"]
+
+    print(
+        f"[{state.get('leg_name')}] "
+        f"Candle: {candle_time} | "
+        f"Close: {candle['close']} | "
+        f"RSI: {rsi:.2f}"
+    )
+
+    # -------------------------------------------------
+    # RSI <= 30
+    # -------------------------------------------------
+    if rsi <= 30:
+
+        state["rsi_oversold"] = True
+
+        # If RSI goes back below 30 before entry,
+        # keep waiting for the eventual recovery above 30.
+        state["entry_pending"] = False
+
+        print(
+            f"🔵 {state.get('leg_name')} "
+            f"RSI <= 30 -> OVERSOLD"
+        )
+
+        return None
+
+    # -------------------------------------------------
+    # RSI > 30 after previously being <= 30
+    # -------------------------------------------------
+    if rsi > 30 and state["rsi_oversold"]:
+
+        state["entry_pending"] = True
+        state["rsi_oversold"] = False
+        state["last_signal_candle_time"] = candle_time
+
+        print(
+            f"🟢 {state.get('leg_name')} "
+            f"RSI crossed above 30"
+        )
+
+        print(
+            f"⏳ {state.get('leg_name')} "
+            f"ENTRY PENDING -> NEXT 5-MIN CANDLE OPEN"
+        )
+
+        return "ENTRY_PENDING"
+
+    return None
+
+def enter_trade(leg_name, token, state, price):
+    if state["position"]:
+        return
+
+    price = float(price)
+
+    state["position"] = True
+    state["entry_price"] = price
+    state["entry_time"] = datetime.now(IST)
+
+    state["target_price"] = price + TARGET_POINTS
+
+    if leg_name == "CE":
+        sl_points = CE_SL_POINTS
+    else:
+        sl_points = PE_SL_POINTS
+
+    state["stop_price"] = price - sl_points
+
+    state["entry_pending"] = False
+
+    print("\n==============================")
+    print(f"🚀 {leg_name} ENTRY")
+    print("Token       :", token)
+    print("Entry Price :", price)
+    print("Target      :", state["target_price"])
+    print("Stop Loss   :", state["stop_price"])
+    print("==============================\n")
+
+    # Trade log
+    log_trade_event(
+        event_type="ENTRY",
+        leg_name=leg_name,
+        token=token,
+        symbol=state.get("symbol", SYMBOL),
+        side="BUY",
+        lot=state["lot"],
+        price=price,
+        reason="RSI_RECOVERY_ABOVE_30",
+        pnl=0,
+        cum_pnl=state["pnl"]
+    )
+
+def exit_trade(leg_name, token, state, price, reason):
+    if not state["position"]:
+        return
+
+    price = float(price)
+
+    entry_price = float(state["entry_price"])
+
+    pnl = (
+        (price - entry_price)
+        * LOTSIZE
+        * state["lot"]
+    )
+
+    state["pnl"] += pnl
+
+    print("\n==============================")
+    print(f"🔴 {leg_name} EXIT")
+    print("Entry       :", entry_price)
+    print("Exit        :", price)
+    print("Reason      :", reason)
+    print("Trade PnL   :", pnl)
+    print("Cum PnL     :", state["pnl"])
+    print("==============================\n")
+
+    log_trade_event(
+        event_type="EXIT",
+        leg_name=leg_name,
+        token=token,
+        symbol=state.get("symbol", SYMBOL),
+        side="SELL",
+        lot=state["lot"],
+        price=price,
+        reason=reason,
+        pnl=pnl,
+        cum_pnl=state["pnl"]
+    )
+
+    # Reset position only.
+    # RSI setup starts fresh after exit.
+    state["position"] = False
+    state["entry_price"] = None
+    state["entry_time"] = None
+    state["target_price"] = None
+    state["stop_price"] = None
+
+    state["entry_pending"] = False
+    state["rsi_oversold"] = False
+
+def handle_leg(leg_name, token, candle, state, ltp):
+
+    # ---------------------------------------------
+    # Completed 5-minute candle
+    # ---------------------------------------------
+    if candle:
+
+        signal = process_rsi_signal(
+            state,
+            candle
+        )
+
+        if signal == "ENTRY_PENDING":
+
+            print(
+                f"⏳ {leg_name}: "
+                f"Waiting for NEXT 5-minute candle"
+            )
+
+def check_pending_entry(leg_name, token, state, msg, ltp):
+
+    if not state["entry_pending"]:
+        return
+
+    if state["position"]:
+        state["entry_pending"] = False
+        return
+
+    ltt = msg.get("LTT")
+
+    if not ltt:
+        return
+
+    try:
+        candle_time = datetime.strptime(
+            ltt,
+            "%H:%M:%S"
+        ).time()
+
+    except Exception:
+        return
+
+    # ------------------------------------------------
+    # 5-minute candle boundaries
+    #
+    # 09:15
+    # 09:20
+    # 09:25
+    # 09:30 ...
+    # ------------------------------------------------
+
+    if candle_time.minute % 5 != 0:
+        return
+
+    print(
+        f"🚀 {leg_name}: "
+        f"NEXT 5-MIN CANDLE STARTED"
+    )
+
+    print(
+        f"🚀 {leg_name}: "
+        f"ENTRY AT FIRST TICK = {ltp}"
+    )
+
+    enter_trade(
+        leg_name,
+        token,
+        state,
+        ltp
+    )
+
 def init_state():
     return {
-        "marked": None,
+        # Position
         "position": False,
-        "trading_disabled": False,
         "entry_price": None,
         "entry_time": None,
         "lot": 2,
         "pnl": 0.0,
-        "symbol": None,
-        "rearm_required": False,
-        "moment":0.0,
-        "strike":None
-    }
 
+        # Instrument
+        "symbol": None,
+        "strike": None,
+        "leg_name": None,
+        "token": None,
+
+        # RSI
+        "rsi14": None,
+        "avg_gain": None,
+        "avg_loss": None,
+
+        # RSI signal state
+        "rsi_oversold": False,
+        "entry_pending": False,
+
+        # Prevent duplicate processing
+        "last_signal_candle_time": None,
+
+        # Trade control
+        "target_price": None,
+        "stop_price": None,
+
+        # Existing compatibility fields
+        "trading_disabled": False,
+        "rearm_required": False,
+        "moment": 0.0
+    }
 
 
 # =========================
@@ -739,10 +1030,24 @@ def on_message(msg):
     # store LTP
     if token == CE_ID:
         #tick_wise_handler("CE", token, ce_state, ltp)
+        check_pending_entry(
+        "CE",
+        token,
+        ce_state,
+        msg,
+        ltp
+    )
         telemetry["ce_ltp"] = float(ltp or 0)
 
     if token == PE_ID:
         #tick_wise_handler("PE", token, pe_state, ltp)
+        check_pending_entry(
+        "PE",
+        token,
+        pe_state,
+        msg,
+        ltp
+    )
         telemetry["pe_ltp"] = float(ltp or 0)  
 
     # =========================
@@ -786,14 +1091,276 @@ def on_message(msg):
 
 
 
+threading.Thread(target=trade_log_worker, daemon=True).start()
+
+
+wait_for_start()
+next_expiry = get_next_expiry()
+
+print("Next expiry:", next_expiry)
+
+# =========================
+# INDEX FIRST CANDLE
+# =========================
+idx = dhan.intraday_minute_data(
+    security_id=13,
+    exchange_segment="IDX_I",
+    instrument_type="INDEX",
+    from_date=today,
+    to_date=today
+)
+
+data = idx.get("data", {})
+
+opens = data.get("open", [])
+highs = data.get("high", [])
+lows = data.get("low", [])
+closes = data.get("close", [])
+volumes = data.get("volume", [])
+timestamps = data.get("timestamp", [])
+
+opening_candles = []
+
+
+for i in range(len(timestamps)):
+    ts = datetime.fromtimestamp(timestamps[i], IST) 
+
+    if ts.hour == 9 and 15 <= ts.minute <= 17:
+        candle = {
+            "timestamp": timestamps[i],
+            "open": opens[i],
+            "high": highs[i],
+            "low": lows[i],
+            "close": closes[i],
+            "volume": volumes[i]
+        }
+        opening_candles.append(candle)
+
+print("Opening candles:", opening_candles)
+
+if opening_candles:
+    atm_price = float(opening_candles[0]["close"])  
+    ATM = calculate_atm(atm_price)
+    print("📌 ATM:", ATM)
+
+else:
+    print("Waiting for 9:17 candle...")
+
+
+# =========================
+# OPTION SELECTION
+# =========================
+
+# =========================
+# OPTION CHAIN
+# =========================
+
+atm = ATM
+
+
+
+oc = dhan.option_chain(
+    under_security_id=13,                       # Nifty
+    under_exchange_segment="IDX_I",
+    expiry=str(next_expiry)
+)
+
+option_data = oc["data"]["data"]["oc"]
+
+
+
+target = 210
+
+best_ce = None
+best_pe = None
+
+best_ce_ltp = float("inf")
+best_pe_ltp = float("inf")
+
+
+for strike, strike_data in option_data.items():
+
+    strike = float(strike)
+
+    # ================= CE =================
+    # ONLY ATM OR ITM CE
+    if strike <= atm and "ce" in strike_data:
+
+        ce_ltp = strike_data["ce"]["last_price"]
+
+        if ce_ltp >= target and ce_ltp < best_ce_ltp:
+
+            best_ce_ltp = ce_ltp
+
+            best_ce = {
+                "strike": strike,
+                "ltp": ce_ltp,
+                "security_id": strike_data["ce"]["security_id"]
+                }
+
+    # ================= PE =================
+    # ONLY ATM OR ITM PE
+    # ================= PE =================
+    
+    if strike >= atm and "pe" in strike_data:
+
+        pe_ltp = strike_data["pe"]["last_price"]
+
+        if pe_ltp >= target and pe_ltp < best_pe_ltp:
+
+            best_pe_ltp = pe_ltp
+
+            best_pe = {
+                "strike": strike,
+                "ltp": pe_ltp,
+                "security_id": strike_data["pe"]["security_id"]
+            }    # FINAL VALUES
+
+
+
+ce_strike = best_ce["strike"]
+CE_ID = str(best_ce["security_id"])
+
+pe_strike = best_pe["strike"]
+PE_ID = str(best_pe["security_id"])
+
+ce_security_id = CE_ID
+pe_security_id = PE_ID
+
+
+ce_state = init_state()
+pe_state = init_state()
+
+builders = {
+    CE_ID: FiveMinuteCandleBuilder(),
+    PE_ID: FiveMinuteCandleBuilder()
+}
+
+
+finder=FindInstrument()
+
+ce_row = find_option_security(fno_df, ce_strike, "CE", today, "NIFTY")
+pe_row = find_option_security(fno_df, pe_strike, "PE", today, "NIFTY")
+
+AngelCE = finder.get_option("NIFTY" , int(ce_strike) , "CE")
+AngelPE = finder.get_option("NIFTY" , int(pe_strike) , "PE")
+
+#print("angel tokens" , AngelCE , AngelPE)
+
+ce_state["leg_name"] = "CE"
+ce_state["token"] = CE_ID
+ce_state["strike"] = ce_strike
+
+pe_state["leg_name"] = "PE"
+pe_state["token"] = PE_ID
+pe_state["strike"] = pe_strike
+
+
+
+# Log CE leg
+logtradeleg(
+    COMMON_ID,
+    "CE",
+    f"NIFTY CE {ce_strike}",
+    str(ce_strike),
+    str(today),
+    str(ce_security_id)
+)
+
+# Log PE leg
+logtradeleg(
+    COMMON_ID,
+    "PE",
+    f"NIFTY PE {pe_strike}",
+    str(pe_strike),
+    str(today),
+    str(pe_security_id)
+)
+
+
+ce_state["candles"] = load_history(
+    ce_security_id,
+    candle_count=200
+)
+
+
+pe_state["candles"] = load_history(
+    pe_security_id,
+    candle_count=200
+)
+
+ema_candles = ce_state["candles"]
+
+current_minute = datetime.now(IST).replace(
+    second=0,
+    microsecond=0
+)
+
+last_candle_time = ema_candles[-1]["datetime"].replace(
+    second=0,
+    microsecond=0
+)
+
+print("current minute:", current_minute)
+print("last candle time:", last_candle_time)
+
+if current_minute == last_candle_time:
+    print("MATCH - removing last candle")
+    ema_candles = ema_candles[:-1]
+else:
+    print("NO MATCH - keeping last candle")
+
+ce_state["live_rsi14"], ce_state["avg_gain"], ce_state["avg_loss"] = calculate_rsi(
+    [c["close"] for c in ema_candles],
+    period=14
+)
+
+
+current_minute = datetime.now(IST).replace(
+    second=0,
+    microsecond=0
+)
+
+last_candle_time = peema_candles[-1]["datetime"].replace(
+    second=0,
+    microsecond=0
+)
+
+print("current minute:", current_minute)
+print("last candle time:", last_candle_time)
+
+if current_minute == last_candle_time:
+    print("MATCH - removing last candle")
+    peema_candles = peema_candles[:-1]
+else:
+    print("NO MATCH - keeping last candle")
+
+
+pe_state["live_rsi14"], pe_state["avg_gain"], pe_state["avg_loss"] = calculate_rsi(
+    [c["close"] for c in peema_candles],
+    period=14
+)
+
+
+instruments = [
+    (MarketFeed.NSE_FNO, CE_ID, MarketFeed.Quote),
+    (MarketFeed.NSE_FNO, PE_ID, MarketFeed.Quote)
+]
+
+feed = MarketFeed(dhan_context, instruments, "v2")
+
+TOKENS = [
+  str(ce_security_id) , str(pe_security_id)
+]
+
+
 
 # =====================
 # START WS 
 # =====================
 
 
-TOKENS = [CE_ID , PE_ID]
-
+"""
 def on_tick(token, msg):
 
     if token not in TOKENS:
@@ -803,3 +1370,20 @@ def on_tick(token, msg):
 
 for t in TOKENS:
     subscribe(t, on_tick)
+"""
+
+while True:
+    try:
+
+        feed.run_forever()
+        msg = feed.get_data()
+
+
+        if msg:
+            on_message(msg)
+
+    except Exception as e:
+        print("WS ERROR:", e)
+        feed.run_forever()
+ 
+  
