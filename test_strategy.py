@@ -7,7 +7,6 @@ import os
 from dhanhq import MarketFeed
 from dhanhq import DhanContext, dhanhq
 from dhan_token import get_access_token
-from candle_builder import OneMinuteCandleBuilder
 from find_security import load_fno_master, find_option_security
 import threading
 from signal_emitter import emit_signal
@@ -16,6 +15,7 @@ from queue import Queue
 import asyncio
 from find_instrument import FindInstrument
 import option_chain_manager
+from heikin_ashi_builder import HeikinAshiCandleBuilder
 
 
 # =========================
@@ -317,6 +317,8 @@ telemetry = {
     "pnl_percentage": 0.0,
     "ce_ltp": 0.0,
     "pe_ltp": 0.0,
+    "ce_ha_close": 0.0,
+    "pe_ha_close": 0.0,
     "ce_pnl": 0.0,
     "pe_pnl": 0.0
 }
@@ -335,8 +337,21 @@ def telemetry_broadcaster():
                 except:
                     return 0
 
-            payload = {k: safe_number(v) if k in ["pnl","ce_pnl","pe_pnl","ce_ltp","pe_ltp","pnl_percentage"] else v
-                for k, v in payload.items()}
+            payload = {
+                k: safe_number(v)
+                if k in [
+                    "pnl",
+                    "ce_pnl",
+                    "pe_pnl",
+                    "ce_ltp",
+                    "pe_ltp",
+                    "ce_ha_close",
+                    "pe_ha_close",
+                    "pnl_percentage"
+                ]
+                else v
+                for k, v in payload.items()
+            }
 
 
             res = requests.post(
@@ -547,9 +562,14 @@ print("angel tokens" , AngelCE , AngelPE)
 print("📌 CE:", CE_ID)
 print("📌 PE:", PE_ID)
 
+
+
+# One independent Heikin-Ashi builder per option leg.
+# Keep 1-minute timeframe to preserve the timing of the existing
+# OneMinuteCandleBuilder-based strategy.
 builders = {
-    CE_ID: OneMinuteCandleBuilder(),
-    PE_ID: OneMinuteCandleBuilder()
+    CE_ID: HeikinAshiCandleBuilder(timeframe_minutes=1),
+    PE_ID: HeikinAshiCandleBuilder(timeframe_minutes=1)
 }
 
 # Log CE leg
@@ -885,7 +905,7 @@ def on_message(msg):
     if not builder:
         return
 
-    candle = builder.process_tick(msg)
+    processed_tick = builder.process_tick(msg)
 
     token = str(msg["security_id"])
 
@@ -896,7 +916,20 @@ def on_message(msg):
 
     if token == PE_ID:
         tick_exit_check("PE", token, pe_state, ltp)
-        telemetry["pe_ltp"] = float(ltp or 0)  
+        telemetry["pe_ltp"] = float(ltp or 0)
+
+    # Live Heikin-Ashi values are informational/strategy values.
+    # They must NOT replace the real LTP used for execution/PnL.
+    if processed_tick:
+        if token == CE_ID:
+            telemetry["ce_ha_close"] = float(
+                processed_tick.get("ha_close", 0) or 0
+            )
+
+        elif token == PE_ID:
+            telemetry["pe_ha_close"] = float(
+                processed_tick.get("ha_close", 0) or 0
+            )
 
     # =========================
     # RUN UNIVERSAL EXIT (TICK LEVEL)
@@ -905,19 +938,48 @@ def on_message(msg):
         universal_exit_check(telemetry["ce_ltp"], telemetry["pe_ltp"])
 
     # =========================
-    # CANDLE LOGIC
+    # HEIKIN-ASHI CANDLE LOGIC
     # =========================
-    if candle:
+    #
+    # process_tick() returns live HA values on every tick, but
+    # completed_ha is populated only when the 1-minute candle
+    # rolls over.
+    #
+    # Strategy candle logic runs ONLY on the completed HA candle.
+    # Execution/risk logic above continues to use REAL LTP.
+    # =========================
 
-        if token == CE_ID:
-            print("50 reentry CE",token)
-            print(candle)
-            handle_leg("CE", token, candle, ce_state, ltp)
+    if processed_tick:
 
-        if token == PE_ID:
-            print("50 reentry PE",token)
-            print(candle)
-            handle_leg("PE", token, candle, pe_state, ltp)
+        completed_ha = processed_tick.get("completed_ha")
+
+        if completed_ha:
+
+            if token == CE_ID:
+                print("50 reentry CE HA", token)
+                print("Completed HA:", completed_ha)
+                print("Actual LTP:", ltp)
+
+                handle_leg(
+                    "CE",
+                    token,
+                    completed_ha,
+                    ce_state,
+                    ltp
+                )
+
+            if token == PE_ID:
+                print("50 reentry PE HA", token)
+                print("Completed HA:", completed_ha)
+                print("Actual LTP:", ltp)
+
+                handle_leg(
+                    "PE",
+                    token,
+                    completed_ha,
+                    pe_state,
+                    ltp
+                )
 
     # =========================
     # TELEMETRY (REAL-TIME PnL)
