@@ -441,31 +441,3 @@ class HeikinAshiCandleBuilder:
             # Completed HA candle, if a candle just closed
             "completed_ha": completed_ha
         }
-```
-
-### Now the behavior is different
-
-Every tick will give you something like:
-
-```python
-{
-    "type": "processed_tick",
-
-    "ltp": 194.35,
-
-    "candle_open": 200.00,
-    "candle_high": 210.00,
-    "candle_low": 190.00,
-    "candle_close": 194.35,
-
-    "ha_open": 203.50,
-    "ha_high": 210.00,
-    "ha_low": 190.00,
-    "ha_close": 198.5875,
-
-    "cumulative_volume": 8378630,
-    "candle_volume": 123450,
-
-    "is_new_candle": False,
-    "completed_ha": None
-}
