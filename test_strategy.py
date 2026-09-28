@@ -1356,7 +1356,7 @@ def manage_positions(state, ltp):
 
 def on_message(msg):
 
-    print(msg)
+    #print(msg)
 
     global telemetry, ce_state, pe_state , CE_ID, PE_ID, combined_pnl
 
