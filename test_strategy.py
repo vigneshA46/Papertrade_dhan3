@@ -15,7 +15,7 @@ from queue import Queue
 import asyncio
 from find_instrument import FindInstrument
 import option_chain_manager
-from heikin_ashi_builder import HeikinAshiCandleBuilder
+from heikin_ashi_candle import HeikinAshiCandleBuilder
 
 
 # =========================
