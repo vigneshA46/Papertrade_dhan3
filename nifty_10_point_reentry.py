@@ -728,27 +728,59 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
 
 
-    if total >= TARGET_POINTS*65 and not ce_state["trading_disabled"] and not pe_state["trading_disabled"] :
+    if ce_state["position"]:
 
-        print("🏁 TARGET HIT", total)
-        
+        ce_running_pnl = (
+            (ce_ltp - ce_state["entry_price"])
+            * LOTSIZE
+            * ce_state["lot"]
+        )
 
-        # FORCE EXIT CE
-        if ce_state["position"]:
+        # 10 POINT TARGET FOR CE
+        # 10 points × 65 quantity = ₹650 for 1 lot
+        if ce_running_pnl >= 10 * LOTSIZE:
+
+            print("🏁 CE 10 POINT TARGET HIT")
+            print("CE Entry:", ce_state["entry_price"])
+            print("CE Exit:", ce_ltp)
+            print("CE Running PNL:", ce_running_pnl)
+
             exit_price = ce_ltp
-            pnl = (exit_price - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
+
+            pnl = (
+                (exit_price - ce_state["entry_price"])
+                * LOTSIZE
+                * ce_state["lot"]
+            )
 
             ce_state["pnl"] += pnl
             combined_pnl += pnl
 
             deployments = get_today_deployments()
-
             users = group_users_by_broker(deployments)
 
             print("FORMATTED USERS:", users)
 
-            run_async(emit_signal(build_payload("CE", "SELL", CE_ID , "exit","EXIT", ce_ltp, ce_state["pnl"], combined_pnl, ce_state["lot"],users, ce_state["strike"]))) 
+            # SEND EXIT SIGNAL
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "CE",
+                        "SELL",
+                        CE_ID,
+                        "exit",
+                        "EXIT",
+                        ce_ltp,
+                        ce_state["pnl"],
+                        combined_pnl,
+                        ce_state["lot"],
+                        users,
+                        ce_state["strike"]
+                    )
+                )
+            )
 
+            # LOG TRADE EVENT
             log_trade_event(
                 event_type="EXIT",
                 leg_name="CE",
@@ -757,33 +789,78 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 side="SELL",
                 lot=ce_state["lot"],
                 price=exit_price,
-                reason="UNIVERSAL EXIT",
-                pnl= ce_state["pnl"],
+                reason="10 POINT TARGET",
+                pnl=ce_state["pnl"],
                 cum_pnl=combined_pnl
-                )   
+            )
 
+            # CLOSE CE POSITION
             ce_state["position"] = False
+
+            # ENABLE RE-ENTRY
             ce_state["rearm_required"] = True
+
+            # RESET LOT
             ce_state["lot"] = 1
-        #ce_state["trading_disabled"] = True
 
 
+    # =====================================================
+    # PE RUNNING PNL
+    # =====================================================
 
-        # FORCE EXIT PE
-        if pe_state["position"]:
+    if pe_state["position"]:
+
+        pe_running_pnl = (
+            (pe_ltp - pe_state["entry_price"])
+            * LOTSIZE
+            * pe_state["lot"]
+        )
+
+        # 10 POINT TARGET FOR PE
+        # 10 points × 65 quantity = ₹650 for 1 lot
+        if pe_running_pnl >= 10 * LOTSIZE:
+
+            print("🏁 PE 10 POINT TARGET HIT")
+            print("PE Entry:", pe_state["entry_price"])
+            print("PE Exit:", pe_ltp)
+            print("PE Running PNL:", pe_running_pnl)
+
             exit_price = pe_ltp
-            pnl = (exit_price - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+
+            pnl = (
+                (exit_price - pe_state["entry_price"])
+                * LOTSIZE
+                * pe_state["lot"]
+            )
 
             pe_state["pnl"] += pnl
             combined_pnl += pnl
 
             deployments = get_today_deployments()
-
             users = group_users_by_broker(deployments)
 
             print("FORMATTED USERS:", users)
-            
-            run_async(emit_signal(build_payload("PE", "SELL", PE_ID , "exit","EXIT", pe_ltp, pe_state["pnl"], combined_pnl, pe_state["lot"],users, pe_state["strike"]))) 
+
+            # SEND EXIT SIGNAL
+            run_async(
+                emit_signal(
+                    build_payload(
+                        "PE",
+                        "SELL",
+                        PE_ID,
+                        "exit",
+                        "EXIT",
+                        pe_ltp,
+                        pe_state["pnl"],
+                        combined_pnl,
+                        pe_state["lot"],
+                        users,
+                        pe_state["strike"]
+                    )
+                )
+            )
+
+            # LOG TRADE EVENT
             log_trade_event(
                 event_type="EXIT",
                 leg_name="PE",
@@ -792,15 +869,19 @@ def universal_exit_check(ce_ltp, pe_ltp):
                 side="SELL",
                 lot=pe_state["lot"],
                 price=exit_price,
-                reason="UNIVERSAL EXIT",
-                pnl= pe_state["pnl"],
+                reason="10 POINT TARGET",
+                pnl=pe_state["pnl"],
                 cum_pnl=combined_pnl
-                )
+            )
 
+            # CLOSE PE POSITION
             pe_state["position"] = False
+
+            # ENABLE RE-ENTRY
             pe_state["rearm_required"] = True
+
+            # RESET LOT
             pe_state["lot"] = 1
-        #pe_state["trading_disabled"] = True
 
 
 # =========================
