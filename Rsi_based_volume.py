@@ -905,7 +905,7 @@ def handle_leg(state, candle):
         "high": candle["high"],
         "low": candle["low"],
         "close": candle["close"],
-        "time": candle["time"]
+        "time": candle["timestamp"]
     }
 
     # Wait for breakout
