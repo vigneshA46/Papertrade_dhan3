@@ -1180,7 +1180,7 @@ def manage_positions(state, ltp):
 def on_message(msg):
     
 
-    global telemetry, ce_state, pe_state
+    global telemetry, ce_state, pe_state 
 
     if msg.get("type") != "Quote Data":
         return
@@ -1218,9 +1218,9 @@ def on_message(msg):
 
     if token == CE_ID:
 
-
+        
         telemetry["ce_ltp"] = ltp
-        manage_positions(ce_state, ce_ltp)
+        manage_positions(ce_state, ltp)
 
         # Every completed 5-minute candle
         if candle:
@@ -1261,7 +1261,7 @@ def on_message(msg):
     elif token == PE_ID:
 
         telemetry["pe_ltp"] = ltp
-        manage_positions(pe_state, pe_ltp)
+        manage_positions(pe_state, ltp)
 
         # Every completed 5-minute candle
         if candle:
