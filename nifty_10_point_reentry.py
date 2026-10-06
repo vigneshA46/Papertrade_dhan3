@@ -841,6 +841,7 @@ def universal_exit_check(ce_ltp, pe_ltp):
 
             print("FORMATTED USERS:", users)
 
+
             # SEND EXIT SIGNAL
             run_async(
                 emit_signal(
