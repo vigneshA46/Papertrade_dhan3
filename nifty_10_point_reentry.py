@@ -958,7 +958,10 @@ def on_message(msg):
     telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
     telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
 
-
+    if state["rearm_required"]:
+        if ltp < state["marked"]:
+            state["rearm_required"] = False
+            
 
     if not state["position"] and not state["rearm_required"] and not state["trading_disabled"]:
 
