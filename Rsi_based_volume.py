@@ -1328,10 +1328,9 @@ ce_state = init_state()
 pe_state = init_state()
 
 builders = {
-    ce_security_id: OneMinuteCandleBuilder(),
-    pe_security_id: OneMinuteCandleBuilder()
+    CE_ID: FiveMinuteCandleBuilder(),
+    PE_ID: FiveMinuteCandleBuilder()
 }
-
 
 finder=FindInstrument()
 
