@@ -954,6 +954,7 @@ def manage_positions(state, ltp):
     2. Target Exit
     3. Stop Loss Exit
     """
+    global combined_pnl
 
     # ==========================
     # ENTRY
@@ -1055,7 +1056,7 @@ def manage_positions(state, ltp):
 
         state["pnl"] += pnl
 
-        global combined_pnl
+        
         combined_pnl += pnl
 
         print(
