@@ -74,6 +74,7 @@ MARKET_CLOSE = dtime(15, 14)
 
 CE_TARGET_POINTS = 50
 PE_TARGET_POINTS = 50
+combined_pnl = 0
 
 IST = pytz.timezone("Asia/Kolkata")
 
