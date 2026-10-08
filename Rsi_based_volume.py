@@ -986,6 +986,9 @@ def manage_positions(state, ltp):
 
         entry_price = ltp
 
+        deployments = get_today_deployments()
+        users = group_users_by_broker(deployments)
+
         # Store entry details
         state["position"] = True
         state["entry_price"] = entry_price
@@ -1048,6 +1051,9 @@ def manage_positions(state, ltp):
     ):
 
         exit_price = ltp
+
+        deployments = get_today_deployments()
+        users = group_users_by_broker(deployments)
 
         pnl = (
             (exit_price - state["entry_price"])
@@ -1118,6 +1124,9 @@ def manage_positions(state, ltp):
     ):
 
         exit_price = ltp
+
+        deployments = get_today_deployments()
+        users = group_users_by_broker(deployments)
 
         pnl = (
             (exit_price - state["entry_price"])
