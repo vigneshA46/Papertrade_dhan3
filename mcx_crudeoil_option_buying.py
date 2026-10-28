@@ -615,17 +615,40 @@ target_hit = False
 # =========================
 # TELEMETRY
 # =========================
+# NOTE: do NOT re-create the telemetry dict here — the broadcaster sends the
+# global `telemetry`, and a new dict without strategy_id / run_id is rejected.
 
-telemetry = {
-    "status": "ACTIVE",
-    "pnl": 0.0,
-    "ce_ltp": 0.0,
-    "pe_ltp": 0.0,
-    "ce_pnl": 0.0,
-    "pe_pnl": 0.0
-}
+def update_telemetry():
+    ce_running = 0.0
+    pe_running = 0.0
+
+    if ce_state["position"] and ce_state["entry_price"] is not None:
+        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
+
+    if pe_state["position"] and pe_state["entry_price"] is not None:
+        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
+
+    telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
+    telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
+    telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
+
+    if target_hit or ce_state["trading_disabled"] and pe_state["trading_disabled"]:
+        telemetry["status"] = "CLOSED"
+    elif ce_state["position"] or pe_state["position"]:
+        telemetry["status"] = "RUNNING"
+    else:
+        telemetry["status"] = "ACTIVE"
+
 
 def on_message(msg):
+    """Runs the strategy, then refreshes telemetry on EVERY tick (even after early returns)."""
+    _on_message(msg)
+
+    if msg.get("type") == "Quote Data" and str(msg.get("security_id")) in (CE_ID, PE_ID):
+        update_telemetry()
+
+
+def _on_message(msg):
 
     global combined_pnl 
 
@@ -804,21 +827,7 @@ def on_message(msg):
             print(candle)
             handle_leg("PE", token, candle, pe_state, ltp)
 
-    # =========================
-    # TELEMETRY (REAL-TIME PnL)
-    # =========================
-    ce_running = 0
-    pe_running = 0
-
-    if ce_state["position"]:
-        ce_running = (telemetry["ce_ltp"] - ce_state["entry_price"]) * LOTSIZE * ce_state["lot"]
-
-    if pe_state["position"]:
-        pe_running = (telemetry["pe_ltp"] - pe_state["entry_price"]) * LOTSIZE * pe_state["lot"]
-
-    telemetry["ce_pnl"] = ce_state["pnl"] + ce_running
-    telemetry["pe_pnl"] = pe_state["pnl"] + pe_running
-    telemetry["pnl"] = telemetry["ce_pnl"] + telemetry["pe_pnl"]
+    # telemetry is refreshed in on_message() -> update_telemetry()
 
 
 def handle_leg(name, token, candle, state, ltp):
