@@ -18,6 +18,7 @@ from signal_emitter import emit_signal
 import asyncio
 from find_instrument import FindInstrument
 import pandas as pd
+import option_chain_manager
 
 
 NSE_HOLIDAYS = {
@@ -205,7 +206,7 @@ def build_payload(name, side, token , reason,event_type,ltp,pnl,cum_pnl,lot,user
     month = expiry_date.strftime("%b").upper()
     year = expiry_date.strftime("%y")
 
-    symbol = f"NIFTY{day}{month}{year}{ATM}{name}"
+    symbol = f"NIFTY{day}{month}{year}{int(float(strike))}{name}"
     expiry = expiry_date.strftime("%Y-%m-%d")
 
     return {
@@ -873,6 +874,7 @@ def init_state():
         "target": None,              # Fibonacci target
         "stoploss": None,   
         "waiting_retest": False,
+        "waiting_for_breakout": False,
         "trend": None,
         "last_ltp": None,
 
@@ -1315,11 +1317,19 @@ next_expiry = get_next_expiry()
 print("Next expiry:", next_expiry)
 
 
-oc = dhan.option_chain(
-    under_security_id=13,                       # Nifty
-    under_exchange_segment="IDX_I",
-    expiry=str(next_expiry)
-)
+# main.py refreshes the shared chain right before importing this file.
+# Calling dhan.option_chain() again within 3 sec gets rate-limited, so reuse it.
+try:
+    oc = option_chain_manager.get_option_chain()
+    oc["data"]["data"]["oc"]
+except Exception as e:
+    print("⚠️ Shared option chain not usable, calling Dhan directly:", e)
+    time.sleep(3.1)
+    oc = dhan.option_chain(
+        under_security_id=13,                       # Nifty
+        under_exchange_segment="IDX_I",
+        expiry=str(next_expiry)
+    )
 
 
 
@@ -1444,29 +1454,23 @@ pe_state["rsi14"], pe_state["avg_gain"], pe_state["avg_loss"] = calculate_rsi(
 
 print("PE RSI14 :", pe_state["rsi14"])
 
-instruments = [
-    (MarketFeed.NSE_FNO, str(ce_security_id), MarketFeed.Quote),
-    (MarketFeed.NSE_FNO, str(pe_security_id), MarketFeed.Quote)
-]
-
-feed = MarketFeed(dhan_context, instruments, "v2")
+# =========================
+# SHARED FEED (main.py) — no own MarketFeed here
+# =========================
 
 TOKENS = [
-  str(ce_security_id) , str(pe_security_id)
+    str(ce_security_id), str(pe_security_id)
 ]
 
-
-while True:
+def on_tick(token, msg):
+    if str(token) not in TOKENS:
+        return
     try:
-
-        feed.run_forever()
-        msg = feed.get_data()
-
-        if msg:
-            on_message(msg)
-
+        on_message(msg)
     except Exception as e:
-        print("WS ERROR:", e)
-        feed.run_forever()
+        print("RSI STRATEGY ERROR:", e)
 
-        
+for t in TOKENS:
+    subscribe(t, on_tick)
+
+print("✅ RSI/volume strategy subscribed:", TOKENS)

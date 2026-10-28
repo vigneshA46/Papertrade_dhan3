@@ -621,6 +621,14 @@ def handle_leg(name, token, candle, state, ltp):
     if state["trading_disabled"]:
         return
 
+    if state["rearm_required"]:
+        if ltp <= state["marked"]:
+            state["rearm_required"] = False
+            print(f"🔄 {name} RE-ARMED")
+            log_event(f"{name} RE-ARMED", token, "RE-ARMED", ltp, "Rearmed after structure break")
+        return
+
+
     # =============================
     # ENTRY SIGNAL AND EXECUTION
     # =============================
