@@ -28,6 +28,8 @@ import paper_trade_niftyoption50_no_reentry as strategy1
 option_chain_manager.update_option_chain()
 
 import nifty_10_point_reentry as strategy14
+import nifty_rsi_volume_buying as strategy18          # 👈 NEW
+
 #import nifty_future_buying_cumltp as strategy13
 
 #import test_cumulative_ltp_210 as strategy14
